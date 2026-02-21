@@ -174,13 +174,17 @@ class NetkeibaRaceScraper:
         if not sex_age_str:
             return None, None
         
+        # 全角数字・スペースを正規化
+        import unicodedata
+        normalized = unicodedata.normalize('NFKC', sex_age_str).replace(' ', '').replace('\u3000', '')
+
         # 正規表現で性別と年齢を抽出
-        match = re.match(r'^([牡牝セ])(\d{1,2})$', sex_age_str)
+        match = re.match(r'^([牡牝セ])(\d{1,2})$', normalized)
         if match:
             sex = match.group(1)
             age = int(match.group(2))
             return age, sex
-        
+
         return None, None
 
     def _get_from_cache(self, horse_name: str) -> Optional[List[Dict]]:
@@ -553,7 +557,12 @@ class NetkeibaRaceScraper:
                     running_style_info = self._extract_running_style_from_history(history)
                     
                     # 性齢を解析（例: "牡4" → 性別="牡", 年齢=4）
-                    horse_age, horse_sex = self._parse_sex_age(row.get("性齢", ""))
+                    sex_age_raw = row.get("性齢", "")
+                    horse_age, horse_sex = self._parse_sex_age(sex_age_raw)
+                    if horse_age is None:
+                        self._debug_print(f"  ⚠️ 性齢パース失敗: '{sex_age_raw}' → フォールバック58kg適用", "WARNING")
+                    else:
+                        self._debug_print(f"  性齢: {horse_sex}{horse_age}歳 → 斤量基準自動設定", "DEBUG")
                     
                     analysis = self.scorer.calculate_total_score(
                         current_weight=row["斤量"],
@@ -1006,8 +1015,10 @@ class NetkeibaRaceScraper:
             text = col.get_text(strip=True)
             
             if not info["性齢"]:
-                if re.match(r"^[牡牝セ]\d{1,2}$", text):
-                    info["性齢"] = text
+                import unicodedata as _ud
+                _norm = _ud.normalize('NFKC', text).replace(' ', '').replace('\u3000', '')
+                if re.match(r"^[牡牝セ]\d{1,2}$", _norm):
+                    info["性齢"] = _norm  # 正規化済み文字列を保存
             
             if info["斤量"] == 54.0:
                 weight_match = re.match(r"^(\d{2}\.\d)$", text)
