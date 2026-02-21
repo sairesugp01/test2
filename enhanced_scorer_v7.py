@@ -553,9 +553,6 @@ class RaceScorer:
         if not history_data:
             return 0.0
 
-        target_is_jra   = self._is_jra_course(target_course)
-        target_is_local = self._is_local_course(target_course)
-
         TIME_WEIGHTS = [1.0, 0.8, 0.6, 0.5, 0.4]
 
         weighted_score = 0.0
@@ -573,23 +570,11 @@ class RaceScorer:
             same_track  = (not target_track_type or not track_type
                            or track_type == target_track_type)
 
-            race_is_jra   = self._is_jra_course(course)
-            race_is_local = self._is_local_course(course)
-
-            jra_local_mismatch = (
-                (target_is_jra and race_is_local) or
-                (target_is_local and race_is_jra)
-            )
-
+            # 同競馬場のみ点数付与。別競馬場は0点（中山≠東京）
             if same_course and same_track:
                 base_pts = 15.0
             elif same_course and not same_track:
-                base_pts = 10.0
-            elif not same_course and same_track and not jra_local_mismatch:
-                if target_is_jra and race_is_jra:
-                    base_pts = 5.0
-                else:
-                    base_pts = 3.0
+                base_pts = 8.0
             else:
                 base_pts = 0.0
 
@@ -1624,33 +1609,15 @@ class RaceScorer:
                 same_course = (course == target_course)
                 same_track  = (not target_track_type or not tt or tt == target_track_type)
 
-                race_is_jra   = self._is_jra_course(course)
-                race_is_local = self._is_local_course(course)
-                target_is_jra   = self._is_jra_course(target_course)
-                target_is_local = self._is_local_course(target_course)
-                jra_local_mismatch = (
-                    (target_is_jra and race_is_local) or
-                    (target_is_local and race_is_jra)
-                )
-
+                # 同競馬場のみ点数付与。別競馬場は0点（中山≠東京）
                 if same_course and same_track:
                     base_pts   = 15.0
                     match_note = "同場同トラック"
                 elif same_course and not same_track:
-                    base_pts   = 10.0
+                    base_pts   = 8.0
                     match_note = f"同場・トラック違い({tt})"
-                elif not same_course and same_track and not jra_local_mismatch:
-                    if target_is_jra and race_is_jra:
-                        base_pts   = 5.0
-                        match_note = f"JRA別場・同トラック({course})"
-                    else:
-                        base_pts   = 3.0
-                        match_note = f"地方別場・同トラック({course})"
-                elif jra_local_mismatch:
-                    lines.append(f"  {idx+1}走前 {course}({tt}): JRA⇔地方 混在 → 0点（別カテゴリ）")
-                    continue
                 else:
-                    lines.append(f"  {idx+1}走前 {course}({tt}): 別場別トラック → 0点")
+                    lines.append(f"  {idx+1}走前 {course}({tt}): 別競馬場 → 0点（{course}≠{target_course}）")
                     continue
 
                 if time_diff is not None and time_diff != 0:

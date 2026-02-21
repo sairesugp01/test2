@@ -588,6 +588,8 @@ class NetkeibaRaceScraper:
                         target_track_type=track_type,
                         running_style_info=running_style_info,
                         race_pace_prediction=pace_prediction,
+                        horse_age=horse_age,
+                        horse_sex=horse_sex,
                     )
                     for line in breakdown_text.split('\n'):
                         self._debug_print(f"  {line}")
@@ -674,6 +676,47 @@ class NetkeibaRaceScraper:
             self._save_to_cache(horse_name, history)
         
         return history
+
+        
+        # まず直接float変換を試みる
+        try:
+            return float(text)
+        except ValueError:
+            pass
+        
+        # 日本語特殊表記
+        text = text.replace("\u3000", " ").strip()
+        special = {
+            "ハナ": 0.05, "はな": 0.05,
+            "クビ": 0.15, "くび": 0.15,
+            "アタマ": 0.10, "あたま": 0.10,
+            "大差": 2.5, "だいさ": 2.5,
+        }
+        for k, v in special.items():
+            if k in text:
+                return v
+        
+        # 分数表記 "1/2", "3/4", "1 1/2" など
+        import re as _re
+        frac_pattern = _re.match(r'^(\d+)\s+(\d+)/(\d+)$', text)  # "1 1/2"
+        if frac_pattern:
+            whole = int(frac_pattern.group(1))
+            num = int(frac_pattern.group(2))
+            den = int(frac_pattern.group(3))
+            return round((whole + num / den) * 0.6, 2)
+        
+        frac_only = _re.match(r'^(\d+)/(\d+)$', text)  # "1/2", "3/4"
+        if frac_only:
+            num = int(frac_only.group(1))
+            den = int(frac_only.group(2))
+            return round((num / den) * 0.6, 2)
+        
+        # 整数馬身 "1", "2", "3"
+        int_match = _re.match(r'^(\d+)$', text)
+        if int_match:
+            return round(int(int_match.group(1)) * 0.6, 2)
+        
+        return 0.0
 
     def _get_horse_history(self, horse_id: str, current_weight: float,
                           target_distance: int, target_course: str) -> List[Dict]:
@@ -931,10 +974,6 @@ class NetkeibaRaceScraper:
             try:
                 info = self._extract_horse_info(cols, row, row_idx)
                 if info and info.get("馬名") and info.get("horse_id"):
-                    if not info.get("性齢"):
-                        self._debug_print(f"  ⚠️ 行{row_idx} {info['馬名']}: 性齢取得失敗（基準斤量58kg使用）", "WARNING")
-                    else:
-                        self._debug_print(f"  ✅ 行{row_idx} {info['馬名']}: 性齢={info['性齢']}", "DEBUG")
                     horse_data.append(info)
             except Exception as e:
                 if self.debug_mode:
@@ -974,38 +1013,30 @@ class NetkeibaRaceScraper:
             elif not info["馬番"] and len(text) <= 2 and text.isdigit() and 1 <= int(text) <= 18:
                 info["馬番"] = text
         
-        import unicodedata as _ud
-
-        # 性齢取得: 各tdを走査し、性齢パターン（牡4等）に完全一致するtdを優先
-        # 馬名tdは除外して誤検出を防ぐ
-        horse_name_td = None
         for col in cols:
-            link = col.find("a", href=re.compile(r"/horse/\d+"))
-            if link:
-                horse_name_td = col
-                break
-
-        for col in cols:
-            if col is horse_name_td:
-                continue  # 馬名tdはスキップして誤検出防止
+            text = col.get_text(strip=True)
             
             if not info["性齢"]:
-                # パターン1: tdのテキストが性齢そのもの（最優先）
-                _norm = _ud.normalize('NFKC', col.get_text(strip=True)).replace(' ', '').replace('\u3000', '')
+                import unicodedata as _ud
+
+                # パターン1: 独立したtdに「牝3」などが入っている場合
+                _norm = _ud.normalize('NFKC', text).replace(' ', '').replace('\u3000', '')
                 if re.match(r"^[牡牝セ]\d{1,2}$", _norm):
                     info["性齢"] = _norm
-                    break
 
-                # パターン2: spanなどのサブ要素に性齢が入っている場合
+                # パターン2: 馬名と同じtdに「スーパーガール牝3」のように含まれる場合
                 if not info["性齢"]:
-                    for span in col.find_all(['span', 'div']):
+                    m = re.search(r'([牡牝セ])(\d{1,2})', _norm)
+                    if m:
+                        info["性齢"] = m.group(1) + m.group(2)
+
+                # パターン3: spanなどのサブ要素に性齢が入っている場合
+                if not info["性齢"]:
+                    for span in col.find_all(['span', 'td', 'div']):
                         _s = _ud.normalize('NFKC', span.get_text(strip=True)).replace(' ', '')
                         if re.match(r"^[牡牝セ]\d{1,2}$", _s):
                             info["性齢"] = _s
                             break
-        
-        for col in cols:
-            text = col.get_text(strip=True)
             
             if info["斤量"] == 54.0:
                 weight_match = re.match(r"^(\d{2}\.\d)$", text)
