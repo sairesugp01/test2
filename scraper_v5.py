@@ -931,6 +931,10 @@ class NetkeibaRaceScraper:
             try:
                 info = self._extract_horse_info(cols, row, row_idx)
                 if info and info.get("馬名") and info.get("horse_id"):
+                    if not info.get("性齢"):
+                        self._debug_print(f"  ⚠️ 行{row_idx} {info['馬名']}: 性齢取得失敗（基準斤量58kg使用）", "WARNING")
+                    else:
+                        self._debug_print(f"  ✅ 行{row_idx} {info['馬名']}: 性齢={info['性齢']}", "DEBUG")
                     horse_data.append(info)
             except Exception as e:
                 if self.debug_mode:
@@ -970,30 +974,38 @@ class NetkeibaRaceScraper:
             elif not info["馬番"] and len(text) <= 2 and text.isdigit() and 1 <= int(text) <= 18:
                 info["馬番"] = text
         
+        import unicodedata as _ud
+
+        # 性齢取得: 各tdを走査し、性齢パターン（牡4等）に完全一致するtdを優先
+        # 馬名tdは除外して誤検出を防ぐ
+        horse_name_td = None
         for col in cols:
-            text = col.get_text(strip=True)
+            link = col.find("a", href=re.compile(r"/horse/\d+"))
+            if link:
+                horse_name_td = col
+                break
+
+        for col in cols:
+            if col is horse_name_td:
+                continue  # 馬名tdはスキップして誤検出防止
             
             if not info["性齢"]:
-                import unicodedata as _ud
-
-                # パターン1: 独立したtdに「牝3」などが入っている場合
-                _norm = _ud.normalize('NFKC', text).replace(' ', '').replace('\u3000', '')
+                # パターン1: tdのテキストが性齢そのもの（最優先）
+                _norm = _ud.normalize('NFKC', col.get_text(strip=True)).replace(' ', '').replace('\u3000', '')
                 if re.match(r"^[牡牝セ]\d{1,2}$", _norm):
                     info["性齢"] = _norm
+                    break
 
-                # パターン2: 馬名と同じtdに「スーパーガール牝3」のように含まれる場合
+                # パターン2: spanなどのサブ要素に性齢が入っている場合
                 if not info["性齢"]:
-                    m = re.search(r'([牡牝セ])(\d{1,2})', _norm)
-                    if m:
-                        info["性齢"] = m.group(1) + m.group(2)
-
-                # パターン3: spanなどのサブ要素に性齢が入っている場合
-                if not info["性齢"]:
-                    for span in col.find_all(['span', 'td', 'div']):
+                    for span in col.find_all(['span', 'div']):
                         _s = _ud.normalize('NFKC', span.get_text(strip=True)).replace(' ', '')
                         if re.match(r"^[牡牝セ]\d{1,2}$", _s):
                             info["性齢"] = _s
                             break
+        
+        for col in cols:
+            text = col.get_text(strip=True)
             
             if info["斤量"] == 54.0:
                 weight_match = re.match(r"^(\d{2}\.\d)$", text)
