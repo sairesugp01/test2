@@ -981,13 +981,6 @@ class NetkeibaRaceScraper:
         return horse_data
 
     def _extract_horse_info(self, cols, row, row_idx: int) -> Optional[Dict]:
-        # 【診断用】全tdの内容をログ出力（性齢取得デバッグ用・確認後削除）
-        if row_idx <= 3:
-            import unicodedata as _ud2
-            for _i, _c in enumerate(cols):
-                _raw = _c.get_text(strip=True)
-                _norm2 = _ud2.normalize('NFKC', _raw).replace(' ', '')
-                logger.info(f"  [HTML診断] row{row_idx} td[{_i}] raw={repr(_raw[:30])} norm={repr(_norm2[:30])} html={repr(str(_c)[:100])}")
         info = {
             "枠": "", "馬番": "", "馬名": "", "性齢": "",
             "斤量": 54.0, "騎手": "", "オッズ": 1.0, "horse_id": ""
@@ -1018,34 +1011,24 @@ class NetkeibaRaceScraper:
             elif not info["馬番"] and len(text) <= 2 and text.isdigit() and 1 <= int(text) <= 18:
                 info["馬番"] = text
         
+        import unicodedata as _ud
+
+        # 性齢取得: class="Barei"のtdを最優先で探す（netkeibaの実際のHTML構造に対応）
         for col in cols:
-            text = col.get_text(strip=True)
-            
-            if not info["性齢"]:
-                import unicodedata as _ud
+            if not info["性齢"] and 'Barei' in col.get('class', []):
+                _t = _ud.normalize('NFKC', col.get_text(strip=True)).replace(' ', '')
+                m = re.search(r'([牡牝セ])(\d{1,2})', _t)
+                if m:
+                    info["性齢"] = m.group(1) + m.group(2)
 
-                # パターン1: 独立したtdに「牝3」などが入っている場合
-                _norm = _ud.normalize('NFKC', text).replace(' ', '').replace('\u3000', '')
-                if re.match(r"^[牡牝セ]\d{1,2}$", _norm):
-                    info["性齢"] = _norm
-
-                # パターン2: 馬名と同じtdに「スーパーガール牝3」のように含まれる場合
-                if not info["性齢"]:
-                    m = re.search(r'([牡牝セ])(\d{1,2})', _norm)
-                    if m:
-                        info["性齢"] = m.group(1) + m.group(2)
-
-                # パターン3: spanなどのサブ要素に性齢が入っている場合
-                if not info["性齢"]:
-                    for span in col.find_all(['span', 'td', 'div']):
-                        _s = _ud.normalize('NFKC', span.get_text(strip=True)).replace(' ', '')
-                        if re.match(r"^[牡牝セ]\d{1,2}$", _s):
-                            info["性齢"] = _s
-                            break
-
-                # デバッグ: 各tdの内容と性齢取得状況をログに出力
-                if self.debug_mode and not info["性齢"] and text:
-                    logger.debug(f"    [性齢未取得] td raw={repr(text[:40])} norm={repr(_norm[:40])} html={repr(str(col)[:80])}")
+        # フォールバック: Bareiクラスが見つからない場合は全tdから探す
+        if not info["性齢"]:
+            for col in cols:
+                _t = _ud.normalize('NFKC', col.get_text(strip=True)).replace(' ', '')
+                # CheckMarkセル等のノイズを除外（2文字以下かつ牡牝セで始まるもの）
+                if re.match(r'^[牡牝セ]\d{1,2}$', _t):
+                    info["性齢"] = _t
+                    break
             
             if info["斤量"] == 54.0:
                 weight_match = re.match(r"^(\d{2}\.\d)$", text)
