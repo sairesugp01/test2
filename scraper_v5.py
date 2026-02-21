@@ -981,6 +981,13 @@ class NetkeibaRaceScraper:
         return horse_data
 
     def _extract_horse_info(self, cols, row, row_idx: int) -> Optional[Dict]:
+        # 【診断用】全tdの内容をログ出力（性齢取得デバッグ用・確認後削除）
+        if row_idx <= 3:
+            import unicodedata as _ud2
+            for _i, _c in enumerate(cols):
+                _raw = _c.get_text(strip=True)
+                _norm2 = _ud2.normalize('NFKC', _raw).replace(' ', '')
+                logger.info(f"  [HTML診断] row{row_idx} td[{_i}] raw={repr(_raw[:30])} norm={repr(_norm2[:30])} html={repr(str(_c)[:100])}")
         info = {
             "枠": "", "馬番": "", "馬名": "", "性齢": "",
             "斤量": 54.0, "騎手": "", "オッズ": 1.0, "horse_id": ""
@@ -1035,6 +1042,10 @@ class NetkeibaRaceScraper:
                         if re.match(r"^[牡牝セ]\d{1,2}$", _s):
                             info["性齢"] = _s
                             break
+
+                # デバッグ: 各tdの内容と性齢取得状況をログに出力
+                if self.debug_mode and not info["性齢"] and text:
+                    logger.debug(f"    [性齢未取得] td raw={repr(text[:40])} norm={repr(_norm[:40])} html={repr(str(col)[:80])}")
             
             if info["斤量"] == 54.0:
                 weight_match = re.match(r"^(\d{2}\.\d)$", text)
