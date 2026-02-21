@@ -441,40 +441,40 @@ class RaceScorer:
     
     def _calculate_distance_score(self, history_data: List[Dict], target_distance: int) -> float:
         """
-        距離適性スコア（成績連動版）
+        距離適性スコア（重み付き合計版・直近5走評価）
 
-        距離の近さ（基礎点）に加え、その距離での着順・着差で成績係数を乗じる。
-        「走った実績があるだけ」では満点にならない設計。
+        距離の近さ（基礎点）× 成績係数 × 時系列重み を正規化し最大15点にキャップ。
+        直近ほど重要なため時系列重みを設定。
 
         基礎点（距離差）:
-          0〜200m差  → 15点
-          201〜400m差 → 10点
-          401〜600m差 →  5点
-          600m超     →  0点
+          0-200m差  -> 15点
+          201-400m差 -> 10点
+          401-600m差 ->  5点
+          600m超     ->  0点
 
-        成績係数（着順・着差で決定）:
-          1着またはタイム差-0.3s以内       → 1.00 (100%)
-          2着またはタイム差0.3s以内        → 0.85
-          3着またはタイム差0.6s以内        → 0.70
-          4〜5着またはタイム差1.0s以内     → 0.50
-          6〜9着またはタイム差1.5s以内     → 0.30
-          10着以下またはタイム差1.5s超     → 0.10
-          タイム差不明（着順のみ）の場合は着順で判定
+        時系列重み: 1走前:1.0 / 2走前:0.8 / 3走前:0.6 / 4走前:0.5 / 5走前:0.4
+
+        成績係数: 着差0.3s以内->1.00 / 0.6s->0.85 / 1.0s->0.70
+                  1.5s->0.50 / 2.5s->0.30 / 超->0.10
+
+        最終スコア: 重み付き正規化後、最大15点キャップ
         """
         if not history_data:
             return 0.0
 
-        score = 0.0
-        valid = 0
+        TIME_WEIGHTS = [1.0, 0.8, 0.6, 0.5, 0.4]
 
-        for race in history_data[:3]:
+        weighted_score = 0.0
+        weighted_denom = 0.0
+
+        for idx, race in enumerate(history_data[:5]):
             dist = race.get('dist', 0)
             if dist <= 0:
                 continue
 
+            time_w = TIME_WEIGHTS[idx]
             diff = abs(target_distance - dist)
 
-            # 基礎点（距離近さ）
             if diff <= 200:
                 base_pts = 15.0
             elif diff <= 400:
@@ -482,13 +482,10 @@ class RaceScorer:
             elif diff <= 600:
                 base_pts = 5.0
             else:
-                score += 0.0
-                valid += 1
-                continue
+                base_pts = 0.0
 
-            # 成績係数
-            chakujun   = race.get('chakujun', 99)
-            time_diff  = race.get('goal_time_diff', None)  # 勝ち馬との着差（秒）
+            chakujun  = race.get('chakujun', 99)
+            time_diff = race.get('goal_time_diff', None)
 
             if time_diff is not None and time_diff != 0:
                 margin = abs(float(time_diff))
@@ -505,7 +502,6 @@ class RaceScorer:
                 else:
                     coef = 0.10
             else:
-                # 着差不明→着順で判定
                 if chakujun == 1:
                     coef = 1.00
                 elif chakujun == 2:
@@ -519,12 +515,14 @@ class RaceScorer:
                 else:
                     coef = 0.10
 
-            score += base_pts * coef
-            valid += 1
+            weighted_score += base_pts * coef * time_w
+            weighted_denom += time_w
 
-        if valid == 0:
+        if weighted_denom == 0.0:
             return 0.0
-        return round(score / valid, 1)
+
+        raw = weighted_score / weighted_denom
+        return round(min(raw, 15.0), 1)
     
     # JRA競馬場リスト（地方との区別用）
     JRA_COURSES  = ['札幌', '函館', '福島', '新潟', '東京', '中山', '中京', '京都', '阪神', '小倉']
@@ -539,20 +537,18 @@ class RaceScorer:
     def _calculate_course_score(self, history_data: List[Dict], target_course: str,
                                 target_track_type: str = None) -> float:
         """
-        コース適性スコア（成績連動版・JRA/地方区別あり）
+        コース適性スコア（重み付き合計版・直近5走評価）
 
         基礎点（競馬場・トラック一致度）:
-          同競馬場 × 同トラック           → 15点
-          同競馬場 × トラック違い（芝⇔ダ）→ 10点
-          JRA別競馬場 × 同トラック        →  5点（コース形状は異なるが同馬場水準）
-          地方別競馬場 × 同トラック        →  3点（地方同士の類似性は低め）
-          JRA ⇔ 地方 の混在             →  0点（砂質・レベルが全く別物）
-          別トラック（同競馬場除く）       →  0点
+          同競馬場 × 同トラック           -> 15点
+          同競馬場 × トラック違い（芝/ダ）-> 10点
+          JRA別競馬場 × 同トラック        ->  5点
+          地方別競馬場 × 同トラック        ->  3点
+          JRA/地方の混在                 ->  0点
 
-        成績係数（着差・着順）:
-          着差0.3s以内 → 1.00  着差0.6s以内 → 0.85
-          着差1.0s以内 → 0.70  着差1.5s以内 → 0.50
-          着差2.5s以内 → 0.30  着差2.5s超  → 0.10
+        時系列重み: 1走前:1.0 / 2走前:0.8 / 3走前:0.6 / 4走前:0.5 / 5走前:0.4
+
+        最終スコア: 重み付き正規化後、最大15点キャップ
         """
         if not history_data:
             return 0.0
@@ -560,14 +556,18 @@ class RaceScorer:
         target_is_jra   = self._is_jra_course(target_course)
         target_is_local = self._is_local_course(target_course)
 
-        score = 0.0
-        valid = 0
+        TIME_WEIGHTS = [1.0, 0.8, 0.6, 0.5, 0.4]
 
-        for race in history_data[:3]:
+        weighted_score = 0.0
+        weighted_denom = 0.0
+
+        for idx, race in enumerate(history_data[:5]):
             course     = race.get('course', '')
             track_type = race.get('track_type', '')
             chakujun   = race.get('chakujun', 99)
             time_diff  = race.get('goal_time_diff', None)
+
+            time_w = TIME_WEIGHTS[idx]
 
             same_course = (course == target_course)
             same_track  = (not target_track_type or not track_type
@@ -576,28 +576,23 @@ class RaceScorer:
             race_is_jra   = self._is_jra_course(course)
             race_is_local = self._is_local_course(course)
 
-            # JRA⇔地方の混在は0点（全く別カテゴリ）
             jra_local_mismatch = (
                 (target_is_jra and race_is_local) or
                 (target_is_local and race_is_jra)
             )
 
-            # 基礎点
             if same_course and same_track:
                 base_pts = 15.0
             elif same_course and not same_track:
                 base_pts = 10.0
             elif not same_course and same_track and not jra_local_mismatch:
                 if target_is_jra and race_is_jra:
-                    base_pts = 5.0   # JRA同士の別競馬場
+                    base_pts = 5.0
                 else:
-                    base_pts = 3.0   # 地方同士の別競馬場
+                    base_pts = 3.0
             else:
-                score += 0.0
-                valid += 1
-                continue
+                base_pts = 0.0
 
-            # 成績係数
             if time_diff is not None and time_diff != 0:
                 margin = abs(float(time_diff))
                 if margin <= 0.3:
@@ -626,12 +621,14 @@ class RaceScorer:
                 else:
                     coef = 0.10
 
-            score += base_pts * coef
-            valid += 1
+            weighted_score += base_pts * coef * time_w
+            weighted_denom += time_w
 
-        if valid == 0:
+        if weighted_denom == 0.0:
             return 0.0
-        return round(score / valid, 1)
+
+        raw = weighted_score / weighted_denom
+        return round(min(raw, 15.0), 1)
     
     def _calculate_weight_penalty(self, current_weight: float, horse_age: int = None, 
                                   horse_sex: str = None) -> float:
@@ -1342,7 +1339,7 @@ class RaceScorer:
         BASELINE_4F = 47.2 if target_distance <= 2000 else 47.8 if target_distance <= 2400 else 48.3
         score = 0.0
         
-        for idx, race in enumerate(history_data[:3]):
+        for idx, race in enumerate(history_data[:5]):
             distance = race.get('dist', 0)
             race_name = race.get('race_name', '')
             course = race.get('course', '')
@@ -1565,7 +1562,7 @@ class RaceScorer:
         # ─── 距離適性 ────────────────────────────────────────
         lines.append(f"\n▼ 距離適性: {result['distance_score']:.1f}点")
         if history_data:
-            for idx, race in enumerate(history_data[:3]):
+            for idx, race in enumerate(history_data[:5]):
                 dist       = race.get('dist', 0)
                 chakujun   = race.get('chakujun', 99)
                 time_diff  = race.get('goal_time_diff', None)
@@ -1618,7 +1615,7 @@ class RaceScorer:
         # ─── コース適性 ────────────────────────────────────────
         lines.append(f"\n▼ コース適性: {result['course_score']:.1f}点")
         if history_data:
-            for idx, race in enumerate(history_data[:3]):
+            for idx, race in enumerate(history_data[:5]):
                 course     = race.get('course', '')
                 tt         = race.get('track_type', '')
                 chakujun   = race.get('chakujun', 99)
