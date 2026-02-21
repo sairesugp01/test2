@@ -675,47 +675,6 @@ class NetkeibaRaceScraper:
         
         return history
 
-        
-        # まず直接float変換を試みる
-        try:
-            return float(text)
-        except ValueError:
-            pass
-        
-        # 日本語特殊表記
-        text = text.replace("\u3000", " ").strip()
-        special = {
-            "ハナ": 0.05, "はな": 0.05,
-            "クビ": 0.15, "くび": 0.15,
-            "アタマ": 0.10, "あたま": 0.10,
-            "大差": 2.5, "だいさ": 2.5,
-        }
-        for k, v in special.items():
-            if k in text:
-                return v
-        
-        # 分数表記 "1/2", "3/4", "1 1/2" など
-        import re as _re
-        frac_pattern = _re.match(r'^(\d+)\s+(\d+)/(\d+)$', text)  # "1 1/2"
-        if frac_pattern:
-            whole = int(frac_pattern.group(1))
-            num = int(frac_pattern.group(2))
-            den = int(frac_pattern.group(3))
-            return round((whole + num / den) * 0.6, 2)
-        
-        frac_only = _re.match(r'^(\d+)/(\d+)$', text)  # "1/2", "3/4"
-        if frac_only:
-            num = int(frac_only.group(1))
-            den = int(frac_only.group(2))
-            return round((num / den) * 0.6, 2)
-        
-        # 整数馬身 "1", "2", "3"
-        int_match = _re.match(r'^(\d+)$', text)
-        if int_match:
-            return round(int(int_match.group(1)) * 0.6, 2)
-        
-        return 0.0
-
     def _get_horse_history(self, horse_id: str, current_weight: float,
                           target_distance: int, target_course: str) -> List[Dict]:
         """実際のAPI呼び出し（内部メソッド）"""
@@ -1011,24 +970,30 @@ class NetkeibaRaceScraper:
             elif not info["馬番"] and len(text) <= 2 and text.isdigit() and 1 <= int(text) <= 18:
                 info["馬番"] = text
         
-        import unicodedata as _ud
-
-        # 性齢取得: class="Barei"のtdを最優先で探す（netkeibaの実際のHTML構造に対応）
         for col in cols:
-            if not info["性齢"] and 'Barei' in col.get('class', []):
-                _t = _ud.normalize('NFKC', col.get_text(strip=True)).replace(' ', '')
-                m = re.search(r'([牡牝セ])(\d{1,2})', _t)
-                if m:
-                    info["性齢"] = m.group(1) + m.group(2)
+            text = col.get_text(strip=True)
+            
+            if not info["性齢"]:
+                import unicodedata as _ud
 
-        # フォールバック: Bareiクラスが見つからない場合は全tdから探す
-        if not info["性齢"]:
-            for col in cols:
-                _t = _ud.normalize('NFKC', col.get_text(strip=True)).replace(' ', '')
-                # CheckMarkセル等のノイズを除外（2文字以下かつ牡牝セで始まるもの）
-                if re.match(r'^[牡牝セ]\d{1,2}$', _t):
-                    info["性齢"] = _t
-                    break
+                # パターン1: 独立したtdに「牝3」などが入っている場合
+                _norm = _ud.normalize('NFKC', text).replace(' ', '').replace('\u3000', '')
+                if re.match(r"^[牡牝セ]\d{1,2}$", _norm):
+                    info["性齢"] = _norm
+
+                # パターン2: 馬名と同じtdに「スーパーガール牝3」のように含まれる場合
+                if not info["性齢"]:
+                    m = re.search(r'([牡牝セ])(\d{1,2})', _norm)
+                    if m:
+                        info["性齢"] = m.group(1) + m.group(2)
+
+                # パターン3: spanなどのサブ要素に性齢が入っている場合
+                if not info["性齢"]:
+                    for span in col.find_all(['span', 'td', 'div']):
+                        _s = _ud.normalize('NFKC', span.get_text(strip=True)).replace(' ', '')
+                        if re.match(r"^[牡牝セ]\d{1,2}$", _s):
+                            info["性齢"] = _s
+                            break
             
             if info["斤量"] == 54.0:
                 weight_match = re.match(r"^(\d{2}\.\d)$", text)
