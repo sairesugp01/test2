@@ -1016,9 +1016,25 @@ class NetkeibaRaceScraper:
             
             if not info["性齢"]:
                 import unicodedata as _ud
+
+                # パターン1: 独立したtdに「牝3」などが入っている場合
                 _norm = _ud.normalize('NFKC', text).replace(' ', '').replace('\u3000', '')
                 if re.match(r"^[牡牝セ]\d{1,2}$", _norm):
-                    info["性齢"] = _norm  # 正規化済み文字列を保存
+                    info["性齢"] = _norm
+
+                # パターン2: 馬名と同じtdに「スーパーガール牝3」のように含まれる場合
+                if not info["性齢"]:
+                    m = re.search(r'([牡牝セ])(\d{1,2})', _norm)
+                    if m:
+                        info["性齢"] = m.group(1) + m.group(2)
+
+                # パターン3: spanなどのサブ要素に性齢が入っている場合
+                if not info["性齢"]:
+                    for span in col.find_all(['span', 'td', 'div']):
+                        _s = _ud.normalize('NFKC', span.get_text(strip=True)).replace(' ', '')
+                        if re.match(r"^[牡牝セ]\d{1,2}$", _s):
+                            info["性齢"] = _s
+                            break
             
             if info["斤量"] == 54.0:
                 weight_match = re.match(r"^(\d{2}\.\d)$", text)
