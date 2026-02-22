@@ -26,7 +26,89 @@ logger = logging.getLogger(__name__)
 
 class CourseAnalyzer:
     """コース分析クラス"""
-    
+
+    # コースレコード一覧（芝・秒換算）
+    # キー: (コース名, 距離)  ※コース名はdetect_track_variant後の詳細名
+    COURSE_RECORDS: dict = {
+        # 東京
+        ('東京',   1400): 79.8,
+        ('東京',   1600): 90.5,
+        ('東京',   1800): 103.5,
+        ('東京',   2000): 116.1,
+        ('東京',   2400): 141.2,
+        ('東京',   3400): 208.4,
+        # 中山
+        ('中山',   1200): 67.3,
+        ('中山',   1600): 91.7,
+        ('中山',   1800): 106.1,
+        ('中山',   2000): 118.0,
+        ('中山',   2200): 131.0,
+        ('中山',   2500): 150.7,
+        # 阪神外
+        ('阪神外', 1600): 91.3,
+        ('阪神外', 1800): 103.2,
+        ('阪神外', 2000): 115.5,
+        ('阪神外', 2400): 140.9,
+        # 阪神内
+        ('阪神内', 1200): 67.4,
+        ('阪神内', 1400): 79.3,
+        ('阪神内', 1800): 106.0,
+        ('阪神内', 2000): 118.0,
+        ('阪神内', 2200): 131.5,
+        # 京都外
+        ('京都外', 1600): 90.5,
+        ('京都外', 1800): 103.5,
+        ('京都外', 2000): 116.8,
+        ('京都外', 2200): 130.5,
+        ('京都外', 2400): 143.5,
+        ('京都外', 3000): 179.0,
+        ('京都外', 3200): 192.5,
+        # 京都内
+        ('京都内', 1200): 68.5,
+        ('京都内', 1400): 81.0,
+        ('京都内', 1600): 92.5,
+        ('京都内', 1800): 105.5,
+        ('京都内', 2000): 118.5,
+        # 新潟外
+        ('新潟外', 1600): 90.5,
+        ('新潟外', 1800): 104.5,
+        ('新潟外', 2000): 117.5,
+        ('新潟外', 2200): 130.5,
+        ('新潟外', 2400): 144.0,
+        # 新潟内
+        ('新潟内', 1000): 55.5,
+        ('新潟内', 1200): 67.5,
+        ('新潟内', 1400): 81.5,
+        ('新潟内', 2000): 118.5,
+        # 中京
+        ('中京',   1200): 68.3,
+        ('中京',   1400): 81.5,
+        ('中京',   1600): 93.5,
+        ('中京',   2000): 119.3,
+        # 小倉
+        ('小倉',   1200): 67.9,
+        ('小倉',   1800): 106.5,
+        ('小倉',   2000): 119.5,
+        ('小倉',   2600): 159.5,
+        # 福島
+        ('福島',   1200): 68.0,
+        ('福島',   1700): 101.8,
+        ('福島',   1800): 107.0,
+        ('福島',   2000): 119.8,
+        ('福島',   2600): 160.0,
+        # 札幌
+        ('札幌',   1200): 68.6,
+        ('札幌',   1500): 89.0,
+        ('札幌',   1800): 107.2,
+        ('札幌',   2000): 120.0,
+        ('札幌',   2600): 160.5,
+        # 函館
+        ('函館',   1200): 68.3,
+        ('函館',   1800): 107.5,
+        ('函館',   2000): 120.2,
+        ('函館',   2600): 161.0,
+    }
+
     COURSE_TYPE_CLASSIFICATION = {
         '東京': 'long_straight',
         '新潟外': 'long_straight',
@@ -55,16 +137,20 @@ class CourseAnalyzer:
             1400: 33.3, 1600: 33.8, 1800: 34.5, 2000: 35.0, 2400: 35.5, 3400: 37.0
         },
         '京都外': {
-            1400: 33.8, 1600: 34.3, 1800: 34.8, 2000: 35.2, 2200: 35.5, 2400: 36.0, 3000: 37.5
+            # 外回りコース（「外」表記 + 2200・2400・3000・3200は外回り固定）
+            1400: 33.8, 1600: 34.3, 1800: 34.8, 2000: 35.2, 2200: 35.5, 2400: 36.0, 3000: 37.5, 3200: 37.8
         },
         '京都内': {
+            # 内回りコース（「外」表記なし・2000m以下）
             1200: 34.5, 1400: 35.0, 1600: 35.5, 1800: 36.0, 2000: 36.5
         },
         '阪神外': {
-            1400: 33.5, 1600: 34.0, 1800: 34.3, 2000: 34.8, 2200: 35.2, 2400: 35.5, 3000: 37.0
+            # 外回りコース: 1600, 1800, 2000, 2400（1400外は実質なし・2200は内回り・3000mは存在しない）
+            1600: 34.0, 1800: 34.3, 2000: 34.8, 2400: 35.5
         },
         '阪神内': {
-            1200: 34.8, 1400: 35.2, 1600: 35.5, 1800: 36.0, 2000: 36.5
+            # 内回りコース: 1200, 1400, 1800, 2000, 2200（阪神大賞典）
+            1200: 34.8, 1400: 35.2, 1800: 36.0, 2000: 36.5, 2200: 36.8
         },
         '新潟外': {
             1600: 33.0, 1800: 33.5, 2000: 33.8, 2200: 34.5, 2400: 35.0
@@ -101,20 +187,28 @@ class CourseAnalyzer:
             return f'{course}内'
         
         if course == '京都':
-            if distance <= 1400:
-                return '京都内'
-            elif distance >= 2200:
+            # 外回り固定距離: 2200, 2400, 3000, 3200（内回りコースが存在しない）
+            # 内回り固定距離: 1200
+            # 1400・1600: 新馬・未勝利→内回り／1勝クラス以上→外回り
+            #             netkeibaは外回りのみ「外」表記のため、distance_textで正しく判定される
+            # 1800・2000: 内回りのみ存在
+            if distance in [2200, 2400, 3000, 3200]:
                 return '京都外'
             else:
-                return '京都外'
+                return '京都内'   # 1200〜2000は内回りデフォルト（外回りはdistance_textの「外」で判定済み）
         
         elif course == '阪神':
+            # 内回り: 1200, 1400, 1800, 2000, 2200（阪神大賞典）
+            # 外回り: 1600, 1800, 2000, 2400
+            # ※1800・2000は内外両方存在するが、distance_textに情報がない場合は外回りをデフォルトとする
             if distance <= 1400:
                 return '阪神内'
             elif distance == 2200:
-                return '阪神内'  # 阪神2200mは内回り（修正）
+                return '阪神内'   # 阪神大賞典（GII）は内回り
+            elif distance == 2400:
+                return '阪神外'   # 宝塚記念（GI）は外回り
             else:
-                return '阪神外'
+                return '阪神外'   # 1600・1800・2000のデフォルトは外回り
         
         elif course == '新潟':
             if distance <= 1600:
@@ -447,7 +541,7 @@ class RaceScorer:
         直近ほど重要なため時系列重みを設定。
 
         基礎点（距離差）:
-          0m差    -> 15点（線形: 0m=15点 / 200m=10点）
+          0-200m差  -> 15点
           201-400m差 -> 10点
           401-600m差 ->  5点
           600m超     ->  0点
@@ -476,8 +570,7 @@ class RaceScorer:
             diff = abs(target_distance - dist)
 
             if diff <= 200:
-                # 線形補間: 0m=15点 / 200m=10点
-                base_pts = 15.0 - (diff / 200.0) * 5.0
+                base_pts = 15.0
             elif diff <= 400:
                 base_pts = 10.0
             elif diff <= 600:
@@ -1200,8 +1293,15 @@ class RaceScorer:
         
         # 9. 【新】連続大敗ペナルティ
         consecutive_loss_penalty = self._calculate_consecutive_big_loss_penalty(history_data)
-        
-        # 10. 脚質ボーナス
+
+        # 10. 【新】連勝着差ボーナス
+        winning_streak_bonus = self._calculate_winning_streak_bonus(history_data)
+
+        # 11. 【新】コースレコード比較スコア
+        cr_score = self._calculate_course_record_score(
+            history_data, target_course, target_distance, target_track_type)
+
+        # 12. 脚質ボーナス
         style_bonus = 0.0
         if running_style_info and race_pace_prediction:
             style = running_style_info.get('style', '')
@@ -1216,7 +1316,7 @@ class RaceScorer:
                 logger.debug(f"  脚質ボーナス: {style}×{pace}×{target_course}{target_distance}m")
                 logger.debug(f"    生ボーナス{raw_bonus:+.1f} × 信頼度{confidence:.2f} × ウェイト{style_weight:.2f} = {style_bonus:+.2f}")
         
-        # 11. 危険フラグ
+        # 13. 危険フラグ
         danger_flags = self._check_danger_flags(history_data, target_course, target_track_type)
         danger_penalty = -15.0 if danger_flags['local_to_jra'] else 0.0
         
@@ -1246,8 +1346,10 @@ class RaceScorer:
                 weight_penalty +
                 layoff_penalty +
                 grade_race_bonus +
-                shinba_boost +  # 【新】新馬戦2戦目ブースト
-                consecutive_loss_penalty +  # 【新】連続大敗ペナルティ
+                shinba_boost +
+                consecutive_loss_penalty +
+                winning_streak_bonus +  # 【新】連勝着差ボーナス
+                cr_score +              # 【新】コースレコード比較スコア
                 danger_penalty
             )
         else:
@@ -1267,6 +1369,8 @@ class RaceScorer:
                 grade_race_bonus +
                 shinba_boost +
                 consecutive_loss_penalty +
+                winning_streak_bonus +  # 【新】連勝着差ボーナス
+                cr_score +              # 【新】コースレコード比較スコア
                 danger_penalty
             )
         
@@ -1282,6 +1386,8 @@ class RaceScorer:
             'grade_race_bonus': grade_race_bonus,
             'shinba_boost': shinba_boost,
             'consecutive_loss_penalty': consecutive_loss_penalty,
+            'winning_streak_bonus': winning_streak_bonus,
+            'cr_score': cr_score,
             'danger_penalty': danger_penalty,
             'danger_flags': danger_flags
         }
@@ -1316,6 +1422,89 @@ class RaceScorer:
             horse_sex=horse_sex,
         )
     
+    def _calculate_course_record_score(self, history_data: List[Dict],
+                                        target_course: str, target_distance: int,
+                                        target_track_type: str) -> float:
+        """
+        【新】コースレコード比較スコア
+
+        同コース・同距離の過去走の走破タイムをコースレコードと比較し、
+        近いほど高得点。直近ほど重みが大きい。
+
+        スコア計算（CR差 = goal_sec - コースレコード）:
+          差 <= 0.0s (CR更新)  → 10.0点
+          差 <= 1.0s           → 10.0 - diff * 2.0  (1.0s差→8.0点)
+          差 <= 2.0s           → 8.0 - (diff-1.0) * 2.0  (2.0s差→6.0点)
+          差 <= 4.0s           → 6.0 - (diff-2.0) * 2.5  (4.0s差→1.0点)
+          差 >  4.0s           → 0.0点
+
+        時系列重み: 1走前×1.0 / 2走前×0.7 / 3走前×0.5 / 4走前×0.4 / 5走前×0.3
+        上限: +10.0点
+        """
+        if not history_data or target_track_type == 'ダート':
+            return 0.0
+
+        TIME_WEIGHTS = [1.0, 0.7, 0.5, 0.4, 0.3]
+
+        # ターゲットコースの詳細名（阪神外/阪神内等）を解決
+        target_variant = CourseAnalyzer.detect_track_variant(target_course, target_distance)
+
+        cr = CourseAnalyzer.COURSE_RECORDS.get((target_variant, target_distance), 0.0)
+        if cr <= 0:
+            cr = CourseAnalyzer.COURSE_RECORDS.get((target_course, target_distance), 0.0)
+        if cr <= 0:
+            return 0.0   # CRデータなし → スキップ
+
+        bonus = 0.0
+        evaluated = 0
+
+        for idx, race in enumerate(history_data[:5]):
+            race_course = race.get('course', '')
+            race_dist   = race.get('dist', 0)
+            race_track  = race.get('track_type', '')
+            goal_sec    = race.get('goal_sec', 0.0)
+
+            # 同コース・同距離・同トラックタイプのみ評価
+            if race_dist != target_distance or race_track != target_track_type:
+                continue
+            race_variant = CourseAnalyzer.detect_track_variant(
+                race_course, race_dist, race.get('dist_text', ''))
+            if race_variant != target_variant:
+                continue
+            if goal_sec <= 0:
+                continue
+
+            diff = goal_sec - cr
+            if diff <= 0:
+                pts = 10.0
+            elif diff <= 1.0:
+                pts = 10.0 - diff * 2.0
+            elif diff <= 2.0:
+                pts = 8.0 - (diff - 1.0) * 2.0
+            elif diff <= 4.0:
+                pts = 6.0 - (diff - 2.0) * 2.5
+            else:
+                pts = 0.0
+
+            w = TIME_WEIGHTS[idx]
+            bonus += pts * w
+            evaluated += 1
+
+            if self.debug_mode:
+                logger.debug(
+                    f"  CRスコア [{idx+1}走前] {race_course}{race_dist}m "
+                    f"走破{goal_sec:.1f}s CR{cr:.1f}s 差+{diff:.2f}s "
+                    f"→ {pts:.1f}×{w:.1f} = {pts*w:.2f}点"
+                )
+
+        if evaluated == 0:
+            return 0.0
+
+        result = round(min(bonus, 10.0), 1)
+        if self.debug_mode and result > 0:
+            logger.debug(f"  CRスコア 合計: +{result}点（{evaluated}走評価・上限10点）")
+        return result
+
     def _calculate_late_4f_score(self, history_data: List[Dict], target_distance: int, 
                                   target_track_type: str) -> float:
         """後半4F評価（芝中長距離専用）- 実データ使用"""
@@ -1462,6 +1651,14 @@ class RaceScorer:
         if result.get('shinba_boost', 0) != 0:
             lines.append(f"  ★新馬戦2戦目ブースト: +{result['shinba_boost']:.1f}点")
 
+        wsb = result.get('winning_streak_bonus', 0)
+        if wsb > 0:
+            lines.append(f"  🔥連勝着差ボーナス: +{wsb:.1f}点")
+
+        crs = result.get('cr_score', 0)
+        if crs > 0:
+            lines.append(f"  ⏱️CRスコア: +{crs:.1f}点")
+
         # 連続大敗ペナルティの詳細ログ
         clp = result.get('consecutive_loss_penalty', 0)
         detail = result.get('consecutive_loss_detail', {})
@@ -1555,8 +1752,7 @@ class RaceScorer:
                 diff       = abs(target_distance - dist)
 
                 if diff <= 200:
-                    # 線形補間: 0m=15点 / 200m=10点
-                    base_pts = 15.0 - (diff / 200.0) * 5.0
+                    base_pts = 15.0
                 elif diff <= 400:
                     base_pts = 10.0
                 elif diff <= 600:

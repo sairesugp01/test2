@@ -750,6 +750,7 @@ class NetkeibaRaceScraper:
             idx_weight = find_col(["斤量"])
             idx_chakusa = find_col(["着差"])
             idx_3f = find_col(["上り"])
+            idx_time = find_col(["タイム", "走破タイム"])  # 走破タイム列
             idx_corner = find_col(["通過順位", "通過", "コーナー"])  # 通過順位（4角など）
             idx_tosu = find_col(["頭数", "出走頭数"])  # 頭数
             
@@ -841,8 +842,15 @@ class NetkeibaRaceScraper:
 
                     # 着差列: 1着からのタイム差（秒数）のみ使用。変換不可時は0.0でログ出力
                     chakusa_text = cols[idx_chakusa].text.strip() if idx_chakusa < len(cols) else ""
+                    winner_margin = 0.0  # 初期化（1着以外はそのまま0.0）
                     if chakujun == 1:
                         goal_time_diff = 0.0
+                        # 1着馬が2着以下につけた着差を winner_margin として保存
+                        # （連勝着差ボーナス計算に使用）
+                        try:
+                            winner_margin = float(chakusa_text)
+                        except Exception:
+                            winner_margin = 0.0
                     else:
                         try:
                             goal_time_diff = float(chakusa_text)
@@ -862,6 +870,19 @@ class NetkeibaRaceScraper:
                         last_3f = float(time_3f_text)
                     except:
                         last_3f = 0.0
+
+                    # 走破タイムをパースして秒数に変換（コースレコード比較用）
+                    goal_sec = 0.0
+                    if idx_time != -1 and idx_time < len(cols):
+                        time_raw = cols[idx_time].text.strip()
+                        try:
+                            if ':' in time_raw:
+                                parts = time_raw.split(':')
+                                goal_sec = int(parts[0]) * 60 + float(parts[1])
+                            else:
+                                goal_sec = float(time_raw)
+                        except Exception:
+                            goal_sec = 0.0
                     
                     # 通過順位を取得（4角順位など）
                     corner_pos = 0
@@ -907,11 +928,14 @@ class NetkeibaRaceScraper:
                         'race_date': date,  # v6用: YYYY/MM/DD形式
                         'course': course_name,
                         'dist': distance,
+                        'dist_text': dist_text,  # 「芝外1600」等の内外情報を保持（京都・阪神・新潟の内外判定に使用）
                         'track_type': race_track_type,
                         'baba': baba,  # 馬場状態
                         'chakujun': chakujun,
                         'chakusa': chakusa_text,
                         'goal_time_diff': goal_time_diff,  # v6用: 連続大敗ペナルティ
+                        'goal_sec': goal_sec,              # 走破タイム（秒）: コースレコード比較用
+                        'winner_margin': winner_margin if chakujun == 1 else 0.0,  # 1着馬が2着につけた着差
                         'weight': weight,
                         'last_3f': last_3f,
                         'late_4f': late_4f,  # 後半4F（ラップタイムから計算）
