@@ -1,10 +1,13 @@
 """
-競馬予想AI - scraper_v5.py（enhanced_scorer_v7対応版）
+競馬予想AI - scraper_v6.py（効率化版）
 最終更新: 2026年2月22日
 
-主な変更点 (v4→v5):
-- enhanced_scorer_v7 に対応（インポート変更）
-- 過去戦績取得を5走→7行スクレイプに変更（中止除外スキップ込みで5走確保）
+主な変更点 (v5→v6):
+- 【最重要】脚質分析ループを廃止 → 馬履歴取得を1回に統合（API呼び出し数を最大50%削減）
+- 過去レース統計(_get_race_last_3f_stats)のキャッシュを追加（race_stats_cacheで重複取得を防止）
+- time.sleep(0.3) を条件付きに変更（キャッシュヒット時はスリープしない）
+- scraping_delayのデフォルトを1.5秒に引き上げ（サーバー負荷軽減）
+- レース統計キャッシュのクリア対応
 
 主な機能:
 1. enhanced_scorer_v6の全機能に対応:
@@ -41,9 +44,9 @@ except ImportError as e:
 
 
 class NetkeibaRaceScraper:
-    """netkeibaスクレイパー v4（enhanced_scorer_v6対応版）"""
+    """netkeibaスクレイパー v6（効率化版）"""
     
-    def __init__(self, scraping_delay: float = 1.0, debug_mode: bool = False):
+    def __init__(self, scraping_delay: float = 1.5, debug_mode: bool = False):
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -55,6 +58,7 @@ class NetkeibaRaceScraper:
         self.skip_new_horse = True  # 新馬戦はスキップする（過去データなし）
         self.cache_hits = 0
         self.api_calls = 0
+        self.race_stats_cache: Dict[str, Dict] = {}  # レース統計キャッシュ（セッション内重複取得防止）
         self.progress_callback = None  # 進捗コールバック関数
 
     def _extract_running_style_from_history(self, history: List[Dict]) -> Optional[Dict]:
@@ -280,6 +284,7 @@ class NetkeibaRaceScraper:
             st.session_state.race_cache = {}
             self.cache_hits = 0
             self.api_calls = 0
+            self.race_stats_cache = {}
             logger.info("キャッシュをクリアしました")
         except Exception as e:
             logger.error(f"キャッシュクリアエラー: {e}")
@@ -465,11 +470,15 @@ class NetkeibaRaceScraper:
         df = pd.DataFrame(horse_data)
         df["指数"] = 0.0
         
-        # 【新機能】全馬の脚質を事前に分析してペース予測
+        # 【効率化】全馬の履歴を一度だけ取得してキャッシュ＆脚質分析を同時実施
+        # （v5では脚質分析ループとスコア計算ループで同じ馬の履歴を2回取得していた）
+        self._debug_print(f"【馬データ一括取得＋脚質分析】全{len(df)}頭...")
         all_running_styles = []
-        self._debug_print(f"【脚質分析】全{len(df)}頭の脚質を判定中...")
-        
+        horse_histories: Dict[int, List[Dict]] = {}  # index → history
+
         for index, row in df.iterrows():
+            if self.progress_callback:
+                self.progress_callback(row['馬名'], index + 1, len(df))
             if row.get("horse_id"):
                 history = self._get_horse_history_cached(
                     row["horse_id"],
@@ -478,6 +487,7 @@ class NetkeibaRaceScraper:
                     race_distance,
                     course
                 )
+                horse_histories[index] = history
                 running_style = self._extract_running_style_from_history(history)
                 if running_style:
                     all_running_styles.append(running_style)
@@ -500,23 +510,14 @@ class NetkeibaRaceScraper:
         
         self._debug_print(f"")
 
+        # 【効率化】horse_historiesから履歴を再利用（追加リクエスト不要）
         for index, row in df.iterrows():
-            # 進捗コールバックを呼び出し
-            if self.progress_callback:
-                self.progress_callback(row['馬名'], index + 1, len(df))
-            
             if row.get("horse_id"):
                 self._debug_print(f"-" * 60)
                 self._debug_print(f"【{row['馬名']}】(馬番:{row['馬番']}) 分析開始")
                 self._debug_print(f"  斤量: {row['斤量']}kg | 騎手: {row['騎手']}")
                 
-                history = self._get_horse_history_cached(
-                    row["horse_id"],
-                    row["馬名"],
-                    row["斤量"],
-                    race_distance,
-                    course
-                )
+                history = horse_histories.get(index, [])  # キャッシュ済み履歴を再利用
                 
                 if history:
                     self._debug_print(f"  過去戦績: {len(history)}レース取得")
@@ -596,8 +597,6 @@ class NetkeibaRaceScraper:
                 else:
                     df.at[index, "指数"] = 0.0
                     self._debug_print(f"  ⚠️ 過去戦績なしのため0点")
-                
-                time.sleep(self.scraping_delay)
 
         df = df.sort_values("指数", ascending=False).reset_index(drop=True)
         
@@ -675,6 +674,8 @@ class NetkeibaRaceScraper:
         if history:
             self._save_to_cache(horse_name, history)
         
+        # 実際にAPIを呼んだ時だけスリープ（サーバー負荷軽減）
+        time.sleep(self.scraping_delay)
         return history
 
         
@@ -881,8 +882,14 @@ class NetkeibaRaceScraper:
                     
                     race_stats = {}
                     if race_id and last_3f > 0:
-                        time.sleep(0.3)
-                        race_stats = self._get_race_last_3f_stats(race_id)
+                        if race_id in self.race_stats_cache:
+                            race_stats = self.race_stats_cache[race_id]
+                            self._debug_print(f"    📦 レース統計キャッシュヒット: {race_id}", "DEBUG")
+                        else:
+                            time.sleep(0.5)  # 0.3→0.5秒に引き上げ
+                            race_stats = self._get_race_last_3f_stats(race_id)
+                            if race_stats:
+                                self.race_stats_cache[race_id] = race_stats
                     elif not race_id and self.debug_mode:
                         logger.debug(f"    race_id未取得 → goal_time_diff=0.0（連続大敗判定不可）")
                     
@@ -1345,4 +1352,4 @@ class NetkeibaRaceScraper:
 
 
 if __name__ == "__main__":
-    print("✅ NetkeibaRaceScraper v5（enhanced_scorer_v7対応・過去5走評価版）loaded")
+    print("✅ NetkeibaRaceScraper v6（効率化版・API呼び出し最大50%削減）loaded")
