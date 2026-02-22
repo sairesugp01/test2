@@ -729,6 +729,127 @@ class NetkeibaRaceScraper:
         code = race_id[4:6] if len(race_id) >= 6 else ""
         return venues.get(code, "不明")
 
+    # ================================================================
+    # 【開催日からrace_idリストを取得する機能】
+    # ================================================================
+
+    VENUE_CODES = {
+        "札幌": "01", "函館": "02", "福島": "03", "新潟": "04",
+        "東京": "05", "中山": "06", "中京": "07", "京都": "08",
+        "阪神": "09", "小倉": "10"
+    }
+
+    def get_kaisai_list(self, kaisai_date: str) -> List[Dict]:
+        """
+        開催日からレース一覧を取得する
+        
+        Args:
+            kaisai_date: 開催日 (例: "20260221")
+        
+        Returns:
+            [{'race_id': '...', 'course': '東京', 'race_num': 1, 'race_name': '...'}, ...]
+        """
+        url = f"https://race.netkeiba.com/top/race_list_sub.html?kaisai_date={kaisai_date}"
+        
+        try:
+            self._debug_print(f"開催日 {kaisai_date} のレース一覧を取得中...")
+            response = self.session.get(url, timeout=15)
+            response.raise_for_status()
+            response.encoding = 'EUC-JP'
+            soup = BeautifulSoup(response.content, "html.parser", from_encoding='EUC-JP')
+            
+            races = []
+            
+            # レースリンクを検索（race_idを含むaタグ）
+            for a_tag in soup.find_all("a", href=re.compile(r"race_id=(\d{12})")):
+                href = a_tag.get("href", "")
+                match = re.search(r"race_id=(\d{12})", href)
+                if match:
+                    race_id = match.group(1)
+                    course = self._get_course_name(race_id)
+                    race_num = int(race_id[10:12]) if len(race_id) >= 12 else 0
+                    race_name = a_tag.get_text(strip=True)
+                    
+                    # 重複除去
+                    if not any(r['race_id'] == race_id for r in races):
+                        races.append({
+                            'race_id': race_id,
+                            'course': course,
+                            'race_num': race_num,
+                            'race_name': race_name if race_name else f"{course}{race_num}R",
+                            'kaisai_date': kaisai_date,
+                        })
+            
+            # 別の取得方法も試みる（メインページ）
+            if not races:
+                url2 = f"https://race.netkeiba.com/top/?kaisai_date={kaisai_date}"
+                response2 = self.session.get(url2, timeout=15)
+                response2.raise_for_status()
+                response2.encoding = 'EUC-JP'
+                soup2 = BeautifulSoup(response2.content, "html.parser", from_encoding='EUC-JP')
+                
+                for a_tag in soup2.find_all("a", href=re.compile(r"race_id=(\d{12})")):
+                    href = a_tag.get("href", "")
+                    match = re.search(r"race_id=(\d{12})", href)
+                    if match:
+                        race_id = match.group(1)
+                        course = self._get_course_name(race_id)
+                        race_num = int(race_id[10:12]) if len(race_id) >= 12 else 0
+                        race_name = a_tag.get_text(strip=True)
+                        
+                        if not any(r['race_id'] == race_id for r in races):
+                            races.append({
+                                'race_id': race_id,
+                                'course': course,
+                                'race_num': race_num,
+                                'race_name': race_name if race_name else f"{course}{race_num}R",
+                                'kaisai_date': kaisai_date,
+                            })
+            
+            # 並び替え：競馬場→レース番号順
+            races.sort(key=lambda x: (x['course'], x['race_num']))
+            
+            self._debug_print(f"  → {len(races)}レース取得完了")
+            return races
+            
+        except Exception as e:
+            logger.error(f"レース一覧取得エラー ({kaisai_date}): {e}")
+            return []
+
+    def get_kaisai_list_multi(self, dates: List[str]) -> Dict[str, List[Dict]]:
+        """
+        複数の開催日のレース一覧を取得する
+        
+        Args:
+            dates: 開催日リスト (例: ["20260221", "20260222"])
+        
+        Returns:
+            {'20260221': [...], '20260222': [...]}
+        """
+        result = {}
+        for date in dates:
+            result[date] = self.get_kaisai_list(date)
+            time.sleep(self.scraping_delay)
+        return result
+
+    def format_kaisai_date(self, date_str: str) -> str:
+        """
+        開催日を見やすい形式に変換
+        
+        Args:
+            date_str: "20260221"
+        
+        Returns:
+            "2026年2月21日(土)"
+        """
+        try:
+            dt = datetime.strptime(date_str, "%Y%m%d")
+            weekdays = ["月", "火", "水", "木", "金", "土", "日"]
+            wd = weekdays[dt.weekday()]
+            return dt.strftime(f"%Y年%-m月%-d日({wd})")
+        except Exception:
+            return date_str
+
     def _parse_shutuba(self, soup: BeautifulSoup) -> List[Dict]:
         horse_data = []
         
@@ -985,3 +1106,101 @@ class NetkeibaRaceScraper:
 
 if __name__ == "__main__":
     print("✅ NetkeibaRaceScraper v4.2（完全版・列名'指数'統一）loaded")
+
+
+# ================================================================
+# Streamlit UI ヘルパー関数（クラス外）
+# ================================================================
+
+def render_kaisai_selector(scraper) -> "Optional[str]":
+    """
+    Streamlit用：開催日・競馬場・レース番号を選択してrace_idを返すUI
+
+    使用例（app.py等）:
+        from scraper_v3_fixed import NetkeibaRaceScraper, render_kaisai_selector
+        scraper = NetkeibaRaceScraper()
+        race_id = render_kaisai_selector(scraper)
+        if race_id:
+            result = scraper.get_race_data(race_id)
+
+    Returns:
+        選択されたrace_id (str) or None
+    """
+    try:
+        import streamlit as st
+    except ImportError:
+        raise ImportError("streamlit が必要です: pip install streamlit")
+
+    st.subheader("🏇 開催日・レース選択")
+
+    # ========== 開催日選択 ==========
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        from datetime import date as date_type
+        selected_date = st.date_input(
+            "開催日を選択",
+            value=date_type.today(),
+            help="レースが開催される日付を選択してください"
+        )
+
+    with col2:
+        fetch_clicked = st.button("🔍 レース一覧を取得", use_container_width=True)
+
+    if fetch_clicked:
+        date_str = selected_date.strftime("%Y%m%d")
+        with st.spinner(f"{scraper.format_kaisai_date(date_str)} のレースを取得中..."):
+            races = scraper.get_kaisai_list(date_str)
+
+        if races:
+            st.session_state["kaisai_races"] = races
+            st.session_state["kaisai_date_str"] = date_str
+            st.success(f"✅ {len(races)}レース取得しました")
+        else:
+            st.warning("⚠️ レースが見つかりませんでした（開催日を確認してください）")
+            st.session_state["kaisai_races"] = []
+
+    # ========== レース選択 ==========
+    races = st.session_state.get("kaisai_races", [])
+
+    if not races:
+        st.info("👆 開催日を選択して「レース一覧を取得」ボタンを押してください")
+        return None
+
+    # 競馬場でフィルタリング
+    venues_in_races = sorted(set(r["course"] for r in races))
+
+    col3, col4 = st.columns(2)
+
+    with col3:
+        selected_venue = st.selectbox(
+            "競馬場",
+            options=["すべて"] + venues_in_races,
+            help="競馬場を絞り込めます"
+        )
+
+    filtered_races = [
+        r for r in races
+        if selected_venue == "すべて" or r["course"] == selected_venue
+    ]
+
+    if not filtered_races:
+        st.warning("該当するレースがありません")
+        return None
+
+    with col4:
+        race_options = {
+            f"{r['course']} {r['race_num']}R　{r['race_name']}": r['race_id']
+            for r in filtered_races
+        }
+        selected_label = st.selectbox(
+            "レース番号",
+            options=list(race_options.keys()),
+        )
+
+    if selected_label:
+        race_id = race_options[selected_label]
+        st.code(f"race_id: {race_id}", language=None)
+        return race_id
+
+    return None
