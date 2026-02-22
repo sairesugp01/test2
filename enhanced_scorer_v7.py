@@ -447,7 +447,7 @@ class RaceScorer:
         直近ほど重要なため時系列重みを設定。
 
         基礎点（距離差）:
-          0-200m差  -> 15点
+          0m差    -> 15点（線形: 0m=15点 / 200m=10点）
           201-400m差 -> 10点
           401-600m差 ->  5点
           600m超     ->  0点
@@ -476,7 +476,8 @@ class RaceScorer:
             diff = abs(target_distance - dist)
 
             if diff <= 200:
-                base_pts = 15.0
+                # 線形補間: 0m=15点 / 200m=10点
+                base_pts = 15.0 - (diff / 200.0) * 5.0
             elif diff <= 400:
                 base_pts = 10.0
             elif diff <= 600:
@@ -1554,7 +1555,8 @@ class RaceScorer:
                 diff       = abs(target_distance - dist)
 
                 if diff <= 200:
-                    base_pts = 15.0
+                    # 線形補間: 0m=15点 / 200m=10点
+                    base_pts = 15.0 - (diff / 200.0) * 5.0
                 elif diff <= 400:
                     base_pts = 10.0
                 elif diff <= 600:
