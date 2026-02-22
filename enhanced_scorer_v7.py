@@ -540,11 +540,13 @@ class RaceScorer:
         距離の近さ（基礎点）× 成績係数 × 時系列重み を正規化し最大15点にキャップ。
         直近ほど重要なため時系列重みを設定。
 
-        基礎点（距離差）:
-          0-200m差  -> 15点
-          201-400m差 -> 10点
-          401-600m差 ->  5点
-          600m超     ->  0点
+        基礎点（距離差・線形補間）:
+          0m差    -> 15.0点
+          100m差  -> 12.5点
+          200m差  -> 10.0点  ← 200m以内は線形補間
+          201-400m差 -> 10.0点（境界を自然につなぐ）
+          401-600m差 ->  5.0点
+          600m超     ->  0.0点
 
         時系列重み: 1走前:1.0 / 2走前:0.8 / 3走前:0.6 / 4走前:0.5 / 5走前:0.4
 
@@ -569,8 +571,9 @@ class RaceScorer:
             time_w = TIME_WEIGHTS[idx]
             diff = abs(target_distance - dist)
 
+            # 線形補間: 0m差→15点、200m差→10点、それ以外はステップ
             if diff <= 200:
-                base_pts = 15.0
+                base_pts = 15.0 - (diff / 200.0) * 5.0   # 0m→15.0, 100m→12.5, 200m→10.0
             elif diff <= 400:
                 base_pts = 10.0
             elif diff <= 600:
@@ -580,6 +583,10 @@ class RaceScorer:
 
             chakujun  = race.get('chakujun', 99)
             time_diff = race.get('goal_time_diff', None)
+
+            # 除外・中止・取消（99着または0着）はスキップ
+            if chakujun == 0 or chakujun >= 90:
+                continue
 
             if time_diff is not None and time_diff != 0:
                 margin = abs(float(time_diff))
@@ -657,6 +664,10 @@ class RaceScorer:
             track_type = race.get('track_type', '')
             chakujun   = race.get('chakujun', 99)
             time_diff  = race.get('goal_time_diff', None)
+
+            # 除外・中止・取消（99着または0着）はスキップ
+            if chakujun == 0 or chakujun >= 90:
+                continue
 
             time_w = TIME_WEIGHTS[idx]
 
@@ -821,7 +832,11 @@ class RaceScorer:
         for idx, race in enumerate(history_data[:5]):
             race_name = race.get('race_name', '')
             chakujun = race.get('chakujun', 99)
-            
+
+            # 除外・中止・取消はスキップ（出走できていないため重賞ボーナス対象外）
+            if chakujun == 0 or chakujun >= 90:
+                continue
+
             grade, _ = self.detect_race_grade(race_name)
             
             if grade not in ['G1', 'G2', 'G3']:
@@ -1189,7 +1204,12 @@ class RaceScorer:
             race_name = race.get('race_name', '')
             course = race.get('course', '')
             baba = race.get('baba', '良')
-            
+
+            # 除外・中止・取消はスキップ
+            _chakujun_check = race.get('chakujun', 99)
+            if _chakujun_check == 0 or _chakujun_check >= 90:
+                continue
+
             if distance <= 0 or my_last_3f <= 0:
                 continue
             
@@ -1514,6 +1534,26 @@ class RaceScorer:
             race_track   = race.get('track_type', '')
             goal_sec     = race.get('goal_sec', 0.0)
             dist_text    = race.get('dist_text', '')
+            chakujun     = race.get('chakujun', 99)
+
+            # 除外・中止はスキップ
+            if chakujun == 0 or chakujun >= 90:
+                continue
+
+            # goal_secがない場合（scraper_v5）: all_horses_resultsから逆算
+            if goal_sec <= 0:
+                all_results = race.get('all_horses_results', [])
+                # 1着馬のgoal_secを取得
+                first_sec = next(
+                    (h.get('goal_sec', 0) for h in all_results if h.get('chakujun') == 1),
+                    0.0
+                )
+                if first_sec > 0:
+                    goal_time_diff = race.get('goal_time_diff', None)
+                    if goal_time_diff is not None:
+                        goal_sec = first_sec + abs(float(goal_time_diff))
+                    elif chakujun == 1:
+                        goal_sec = first_sec
 
             # トラックタイプ一致必須（芝/ダートは比較不可）
             if race_track != target_track_type:
@@ -1721,6 +1761,45 @@ class RaceScorer:
         crs = result.get('cr_score', 0)
         if crs > 0:
             lines.append(f"  ⏱️CRスコア: +{crs:.1f}点")
+            TIME_WEIGHTS_CR = [1.0, 0.7, 0.5, 0.4, 0.3]
+            for idx, race in enumerate(history_data[:5]):
+                rc   = race.get('course', '')
+                rd   = race.get('dist', 0)
+                rt   = race.get('track_type', '')
+                ck   = race.get('chakujun', 99)
+                dtxt = race.get('dist_text', '')
+                if ck == 0 or ck >= 90:
+                    continue
+                if rt != target_track_type:
+                    continue
+                ddiff = abs(rd - target_distance)
+                if ddiff > 200:
+                    continue
+                # goal_sec取得（v5互換フォールバック）
+                gs = race.get('goal_sec', 0.0)
+                if gs <= 0:
+                    all_res = race.get('all_horses_results', [])
+                    fs = next((h.get('goal_sec', 0) for h in all_res if h.get('chakujun') == 1), 0.0)
+                    if fs > 0:
+                        gtd = race.get('goal_time_diff', None)
+                        gs = fs + abs(float(gtd)) if gtd is not None else (fs if ck == 1 else 0.0)
+                if gs <= 0:
+                    continue
+                rv = CourseAnalyzer.detect_track_variant(rc, rd, dtxt)
+                cr_val = CourseAnalyzer.COURSE_RECORDS.get((rv, rd), 0.0) or \
+                         CourseAnalyzer.COURSE_RECORDS.get((rc, rd), 0.0)
+                dist_pen = 0.8 if ddiff == 200 else 1.0
+                w = TIME_WEIGHTS_CR[idx] * dist_pen
+                if cr_val > 0:
+                    diff_cr = gs - cr_val
+                    lines.append(
+                        f"    {idx+1}走前 {rc}{rd}m: 走破{gs:.1f}s / CR({rv}){cr_val:.1f}s 差{diff_cr:+.2f}s"
+                        + (f" (距離差{ddiff}m補正×{dist_pen})" if ddiff > 0 else "")
+                    )
+                else:
+                    lines.append(f"    {idx+1}走前 {rc}{rd}m: 走破{gs:.1f}s（CRデータなし）")
+        elif 'cr_score' in result:
+            lines.append(f"  ⏱️CRスコア: 0.0点（同距離の走破タイムなし or データ未取得）")
 
         # 連続大敗ペナルティの詳細ログ
         clp = result.get('consecutive_loss_penalty', 0)
@@ -1814,8 +1893,14 @@ class RaceScorer:
                 time_diff  = race.get('goal_time_diff', None)
                 diff       = abs(target_distance - dist)
 
+                # 除外・中止はスキップ
+                if chakujun == 0 or chakujun >= 90:
+                    lines.append(f"  {idx+1}走前 {dist}m: 除外/中止 → スキップ")
+                    continue
+
+                # 線形補間: 0m→15点、200m→10点
                 if diff <= 200:
-                    base_pts = 15.0
+                    base_pts = 15.0 - (diff / 200.0) * 5.0
                 elif diff <= 400:
                     base_pts = 10.0
                 elif diff <= 600:
