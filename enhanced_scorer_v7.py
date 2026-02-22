@@ -999,7 +999,61 @@ class RaceScorer:
             logger.debug(f"  連続大敗ペナルティ: {consecutive_losses}回連続 → 実質{reduced_count}回 → {penalty:.1f}点")
         
         return penalty
-    
+
+    def _calculate_winning_streak_bonus(self, history_data: List[Dict]) -> float:
+        """
+        【新】連勝着差ボーナスの計算
+
+        直近3走の「1着かつ着差」を時系列重み付きで累積評価。
+        楽勝（0.5s以上）が続くほど高得点。上限+10点。
+
+        着差スコア（1走ごと）:
+          1着 かつ winner_margin >= 0.5s → +4.0点（楽勝）
+          1着 かつ winner_margin >= 0.2s → +2.5点（明確な差）
+          1着 かつ winner_margin <  0.2s → +1.5点（接戦 or データなし）
+          1着以外                        →  ループ打ち切り（連勝終了）
+
+        時系列重み: 1走前×1.0 / 2走前×0.7 / 3走前×0.5
+        上限: +10.0点
+        """
+        if not history_data:
+            return 0.0
+
+        TIME_WEIGHTS = [1.0, 0.7, 0.5]
+        bonus = 0.0
+
+        for idx, race in enumerate(history_data[:3]):
+            chakujun = race.get('chakujun', 99)
+            if chakujun != 1:
+                break
+
+            # scraper_v6以降は winner_margin に勝ち着差が入る
+            margin = race.get('winner_margin', 0.0)
+            if margin == 0.0:
+                margin = abs(float(race.get('goal_time_diff', 0.0)))
+
+            if margin >= 0.5:
+                pts = 4.0
+            elif margin >= 0.2:
+                pts = 2.5
+            else:
+                pts = 1.5
+
+            w = TIME_WEIGHTS[idx]
+            bonus += pts * w
+
+            if self.debug_mode:
+                label = "楽勝" if margin >= 0.5 else "明確差" if margin >= 0.2 else "接戦"
+                logger.debug(
+                    f"  連勝ボーナス [{idx+1}走前] 1着 着差{margin:.2f}s ({label}) "
+                    f"→ {pts:.1f}×{w:.1f} = {pts*w:.2f}点"
+                )
+
+        result = round(min(bonus, 10.0), 1)
+        if self.debug_mode and result > 0:
+            logger.debug(f"  連勝着差ボーナス 合計: +{result}点（上限10点）")
+        return result
+
     def _calculate_shinba_second_race_boost(self, history_data: List[Dict]) -> float:
         """
         【新】新馬戦2戦目ブーストの計算
