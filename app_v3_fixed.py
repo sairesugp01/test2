@@ -286,20 +286,40 @@ if 'current_mode' not in st.session_state:
     st.session_state['current_mode'] = 'analysis'
 
 # --- 定数定義 ---
-VENUES = {"東京": "05", "京都": "08", "小倉": "10"}
+VENUES = {"東京": "05", "阪神": "09", "小倉": "10"}
 
+# 開催日ごとの競馬場・開催回・日目の定義
+# 形式: {開催日: {競馬場: (開催回, 日目)}}
 SCHEDULE = {
-    "20260214": {"東京": (1, 5), "京都": (2, 5), "小倉": (1, 7)},
-    "20260215": {"東京": (1, 6), "京都": (2, 6), "小倉": (1, 8)}
+    "20260221": {"東京": (1, 8), "阪神": (1, 8), "小倉": (1, 8)},
+    "20260222": {"東京": (1, 9), "阪神": (1, 9), "小倉": (1, 9)},
 }
+
+# --- 日付表示用フォーマット ---
+def format_date_label(date_str: str) -> str:
+    """'20260221' → '2/21(土)' のような表示に変換"""
+    try:
+        dt = datetime.strptime(date_str, "%Y%m%d")
+        weekdays = ["月", "火", "水", "木", "金", "土", "日"]
+        wd = weekdays[dt.weekday()]
+        return f"{dt.month}/{dt.day}({wd})"
+    except Exception:
+        return date_str
 
 # --- サイドバー ---
 with st.sidebar:
     st.header("⚙️ 設定")
     mode = st.selectbox("📌 モード", ["個別レース", "一括レース"])
-    date_sel = st.selectbox("開催日", list(SCHEDULE.keys()))
-    venue_sel = st.selectbox("競馬場", list(SCHEDULE[date_sel].keys()))
-    
+
+    # 開催日選択（2/21・2/22 を見やすく表示）
+    date_options = {format_date_label(d): d for d in SCHEDULE.keys()}
+    date_label_sel = st.selectbox("開催日", list(date_options.keys()))
+    date_sel = date_options[date_label_sel]
+
+    # 競馬場選択（選択日に開催がある競馬場のみ）
+    venues_on_date = list(SCHEDULE[date_sel].keys())
+    venue_sel = st.selectbox("競馬場", venues_on_date)
+
     if mode == "個別レース":
         race_no = st.selectbox("レース番号", range(1, 13), index=10)
         analyze_clicked = st.button("🚀 指数分析", type="primary", use_container_width=True)
@@ -313,7 +333,8 @@ st.title("🏇 競馬予想AI v7.1")
 
 # --- 1. 個別解析ロジック ---
 if mode == "個別レース":
-    rid = f"{date_sel[:4]}{VENUES[venue_sel]}{SCHEDULE[date_sel][venue_sel][0]:02d}{SCHEDULE[date_sel][venue_sel][1]:02d}{race_no:02d}"
+    kaisu, nichime = SCHEDULE[date_sel][venue_sel]
+    rid = f"{date_sel[:4]}{VENUES[venue_sel]}{kaisu:02d}{nichime:02d}{race_no:02d}"
     
     if analyze_clicked:
         progress_placeholder = st.empty()
@@ -413,7 +434,8 @@ elif mode == "一括レース":
         scraper.progress_callback = progress_callback
         
         for i in range(1, 13):
-            rid = f"{date_sel[:4]}{VENUES[venue_sel]}{SCHEDULE[date_sel][venue_sel][0]:02d}{SCHEDULE[date_sel][venue_sel][1]:02d}{i:02d}"
+            kaisu, nichime = SCHEDULE[date_sel][venue_sel]
+            rid = f"{date_sel[:4]}{VENUES[venue_sel]}{kaisu:02d}{nichime:02d}{i:02d}"
             
             # レース進捗を表示
             race_percent = int(((i - 1) / 12) * 100)
