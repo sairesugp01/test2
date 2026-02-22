@@ -1428,51 +1428,56 @@ class RaceScorer:
         """
         【新】コースレコード比較スコア
 
-        同コース・同距離の過去走の走破タイムをコースレコードと比較し、
-        近いほど高得点。直近ほど重みが大きい。
+        同距離・同トラックタイプの過去走を「走ったコースのCR」と比較してスコア化。
+        コースが違っても距離さえ合えば評価可能（コース補正は自動的に織り込まれる）。
 
-        スコア計算（CR差 = goal_sec - コースレコード）:
-          差 <= 0.0s (CR更新)  → 10.0点
-          差 <= 1.0s           → 10.0 - diff * 2.0  (1.0s差→8.0点)
-          差 <= 2.0s           → 8.0 - (diff-1.0) * 2.0  (2.0s差→6.0点)
-          差 <= 4.0s           → 6.0 - (diff-2.0) * 2.5  (4.0s差→1.0点)
-          差 >  4.0s           → 0.0点
+        ロジック:
+          diff = goal_sec - CR(走ったコース・走った距離)
+          → コースが違っても「そのコースでのCRからの差」で公平比較
+
+        スコア（diff に応じて）:
+          diff <= 0.0s  → 10.0点（CR更新・更新水準）
+          diff <= 1.0s  → 10.0 - diff * 2.0       (1.0s差→8.0点)
+          diff <= 2.0s  → 8.0  - (diff-1.0) * 2.0 (2.0s差→6.0点)
+          diff <= 4.0s  → 6.0  - (diff-2.0) * 2.5 (4.0s差→1.0点)
+          diff >  4.0s  → 0.0点
 
         時系列重み: 1走前×1.0 / 2走前×0.7 / 3走前×0.5 / 4走前×0.4 / 5走前×0.3
         上限: +10.0点
+        距離差ペナルティ: 200m差ごとに重み×0.8（最大200m差まで許容）
         """
         if not history_data or target_track_type == 'ダート':
             return 0.0
 
         TIME_WEIGHTS = [1.0, 0.7, 0.5, 0.4, 0.3]
 
-        # ターゲットコースの詳細名（阪神外/阪神内等）を解決
-        target_variant = CourseAnalyzer.detect_track_variant(target_course, target_distance)
-
-        cr = CourseAnalyzer.COURSE_RECORDS.get((target_variant, target_distance), 0.0)
-        if cr <= 0:
-            cr = CourseAnalyzer.COURSE_RECORDS.get((target_course, target_distance), 0.0)
-        if cr <= 0:
-            return 0.0   # CRデータなし → スキップ
-
         bonus = 0.0
         evaluated = 0
 
         for idx, race in enumerate(history_data[:5]):
-            race_course = race.get('course', '')
-            race_dist   = race.get('dist', 0)
-            race_track  = race.get('track_type', '')
-            goal_sec    = race.get('goal_sec', 0.0)
+            race_course  = race.get('course', '')
+            race_dist    = race.get('dist', 0)
+            race_track   = race.get('track_type', '')
+            goal_sec     = race.get('goal_sec', 0.0)
+            dist_text    = race.get('dist_text', '')
 
-            # 同コース・同距離・同トラックタイプのみ評価
-            if race_dist != target_distance or race_track != target_track_type:
+            # トラックタイプ一致必須（芝/ダートは比較不可）
+            if race_track != target_track_type:
                 continue
-            race_variant = CourseAnalyzer.detect_track_variant(
-                race_course, race_dist, race.get('dist_text', ''))
-            if race_variant != target_variant:
+            # 距離差200m以内まで許容
+            dist_diff = abs(race_dist - target_distance)
+            if dist_diff > 200:
                 continue
             if goal_sec <= 0:
                 continue
+
+            # 走ったコースのCRを取得
+            race_variant = CourseAnalyzer.detect_track_variant(race_course, race_dist, dist_text)
+            cr = CourseAnalyzer.COURSE_RECORDS.get((race_variant, race_dist), 0.0)
+            if cr <= 0:
+                cr = CourseAnalyzer.COURSE_RECORDS.get((race_course, race_dist), 0.0)
+            if cr <= 0:
+                continue   # CRデータなし → スキップ
 
             diff = goal_sec - cr
             if diff <= 0:
@@ -1486,15 +1491,19 @@ class RaceScorer:
             else:
                 pts = 0.0
 
-            w = TIME_WEIGHTS[idx]
+            # 距離差ペナルティ（200m差で重み×0.8）
+            dist_penalty = 0.8 if dist_diff == 200 else 1.0
+
+            w = TIME_WEIGHTS[idx] * dist_penalty
             bonus += pts * w
             evaluated += 1
 
             if self.debug_mode:
+                dist_note = f"(距離差{dist_diff}m補正)" if dist_diff > 0 else ""
                 logger.debug(
                     f"  CRスコア [{idx+1}走前] {race_course}{race_dist}m "
-                    f"走破{goal_sec:.1f}s CR{cr:.1f}s 差+{diff:.2f}s "
-                    f"→ {pts:.1f}×{w:.1f} = {pts*w:.2f}点"
+                    f"走破{goal_sec:.1f}s CR({race_variant}){cr:.1f}s 差{diff:+.2f}s "
+                    f"→ {pts:.1f}×{w:.2f} = {pts*w:.2f}点{dist_note}"
                 )
 
         if evaluated == 0:
