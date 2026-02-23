@@ -1558,20 +1558,16 @@ class RaceScorer:
             if chakujun == 0 or chakujun >= 90:
                 continue
 
-            # goal_secがない場合（scraper_v5）: all_horses_resultsから逆算
+            # goal_secがない場合（scraper_v5）: all_horses_resultsから自馬のgoal_secを直接取得
+            # ※ 1着secからgoal_time_diffで逆算すると着差が秒でない場合に異常値になるため禁止
             if goal_sec <= 0:
                 all_results = race.get('all_horses_results', [])
-                # 1着馬のgoal_secを取得
-                first_sec = next(
-                    (h.get('goal_sec', 0) for h in all_results if h.get('chakujun') == 1),
+                my_goal_sec = next(
+                    (h.get('goal_sec', 0) for h in all_results if h.get('chakujun') == chakujun),
                     0.0
                 )
-                if first_sec > 0:
-                    goal_time_diff = race.get('goal_time_diff', None)
-                    if goal_time_diff is not None:
-                        goal_sec = first_sec + abs(float(goal_time_diff))
-                    elif chakujun == 1:
-                        goal_sec = first_sec
+                if my_goal_sec > 0:
+                    goal_sec = my_goal_sec
 
             # トラックタイプ一致必須（芝/ダートは比較不可）
             if race_track != target_track_type:
@@ -1797,10 +1793,8 @@ class RaceScorer:
                 gs = race.get('goal_sec', 0.0)
                 if gs <= 0:
                     all_res = race.get('all_horses_results', [])
-                    fs = next((h.get('goal_sec', 0) for h in all_res if h.get('chakujun') == 1), 0.0)
-                    if fs > 0:
-                        gtd = race.get('goal_time_diff', None)
-                        gs = fs + abs(float(gtd)) if gtd is not None else (fs if ck == 1 else 0.0)
+                    # 自馬のchakujunで直接検索（goal_time_diff逆算は着差単位不一致で誤差が出るため禁止）
+                    gs = next((h.get('goal_sec', 0) for h in all_res if h.get('chakujun') == ck), 0.0)
                 if gs <= 0:
                     continue
                 rv = CourseAnalyzer.detect_track_variant(rc, rd, dtxt)
@@ -2172,10 +2166,8 @@ class RaceScorer:
                 gs = race.get('goal_sec', 0.0)
                 if gs <= 0:
                     all_res = race.get('all_horses_results', [])
-                    fs = next((h.get('goal_sec', 0) for h in all_res if h.get('chakujun') == 1), 0.0)
-                    if fs > 0:
-                        gtd = race.get('goal_time_diff', None)
-                        gs = fs + abs(float(gtd)) if gtd is not None else (fs if ck == 1 else 0.0)
+                    # 自馬のchakujunで直接検索（goal_time_diff逆算は着差単位不一致で誤差が出るため禁止）
+                    gs = next((h.get('goal_sec', 0) for h in all_res if h.get('chakujun') == ck), 0.0)
                 if gs <= 0:
                     lines.append(f"  {idx+1}走前 {rc}{rd}m: 走破タイム取得不可（goal_secなし）")
                     continue
