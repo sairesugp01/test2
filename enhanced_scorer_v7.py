@@ -2125,6 +2125,83 @@ class RaceScorer:
         elif sb == 0:
             lines.append("  （条件非該当：前走が新馬戦で通算1走のみの場合に適用）")
 
+        # ─── 連勝着差ボーナス ────────────────────────────────────────
+        wsb = result.get('winning_streak_bonus', 0)
+        lines.append(f"\n▼ 連勝着差ボーナス: +{wsb:.1f}点")
+        if history_data:
+            streak = 0
+            for race in history_data[:3]:
+                if race.get('chakujun', 99) == 1:
+                    streak += 1
+                else:
+                    break
+            if streak == 0:
+                lines.append("  （連勝なし）")
+            else:
+                TIME_WEIGHTS_WSB = [1.0, 0.7, 0.5]
+                for idx in range(min(streak, 3)):
+                    race = history_data[idx]
+                    margin = race.get('winner_margin', 0.0)
+                    if margin == 0.0:
+                        margin = abs(float(race.get('goal_time_diff', 0.0)))
+                    label = "楽勝" if margin >= 0.5 else "明確差" if margin >= 0.2 else "接戦"
+                    pts = 4.0 if margin >= 0.5 else 2.5 if margin >= 0.2 else 1.5
+                    w = TIME_WEIGHTS_WSB[idx]
+                    lines.append(f"  {idx+1}走前 1着 着差{margin:.2f}s ({label}) → {pts:.1f}×{w:.1f} = {pts*w:.2f}点")
+
+        # ─── CRスコア ────────────────────────────────────────
+        crs = result.get('cr_score', 0)
+        lines.append(f"\n▼ CRスコア（コースレコード比較）: +{crs:.1f}点")
+        if history_data:
+            TIME_WEIGHTS_CR = [1.0, 0.7, 0.5, 0.4, 0.3]
+            evaluated_cr = 0
+            for idx, race in enumerate(history_data[:5]):
+                rc   = race.get('course', '')
+                rd   = race.get('dist', 0)
+                rt   = race.get('track_type', '')
+                ck   = race.get('chakujun', 99)
+                dtxt = race.get('dist_text', '')
+                if ck == 0 or ck >= 90:
+                    continue
+                if rt != target_track_type:
+                    continue
+                ddiff = abs(rd - target_distance)
+                if ddiff > 200:
+                    continue
+                # goal_sec取得（v5互換フォールバック）
+                gs = race.get('goal_sec', 0.0)
+                if gs <= 0:
+                    all_res = race.get('all_horses_results', [])
+                    fs = next((h.get('goal_sec', 0) for h in all_res if h.get('chakujun') == 1), 0.0)
+                    if fs > 0:
+                        gtd = race.get('goal_time_diff', None)
+                        gs = fs + abs(float(gtd)) if gtd is not None else (fs if ck == 1 else 0.0)
+                if gs <= 0:
+                    lines.append(f"  {idx+1}走前 {rc}{rd}m: 走破タイム取得不可（goal_secなし）")
+                    continue
+                rv = CourseAnalyzer.detect_track_variant(rc, rd, dtxt)
+                cr_val = CourseAnalyzer.COURSE_RECORDS.get((rv, rd), 0.0) or \
+                         CourseAnalyzer.COURSE_RECORDS.get((rc, rd), 0.0)
+                if cr_val <= 0:
+                    lines.append(f"  {idx+1}走前 {rc}{rd}m: 走破{gs:.1f}s（CRデータなし）")
+                    continue
+                diff_cr = gs - cr_val
+                if diff_cr <= 0: pts_cr = 10.0
+                elif diff_cr <= 1.0: pts_cr = 10.0 - diff_cr * 2.0
+                elif diff_cr <= 2.0: pts_cr = 8.0 - (diff_cr - 1.0) * 2.0
+                elif diff_cr <= 4.0: pts_cr = 6.0 - (diff_cr - 2.0) * 2.5
+                else: pts_cr = 0.0
+                dist_pen = 0.8 if ddiff == 200 else 1.0
+                w_cr = TIME_WEIGHTS_CR[idx] * dist_pen
+                dist_note = f" (距離差{ddiff}m→重み×{dist_pen})" if ddiff > 0 else ""
+                lines.append(
+                    f"  {idx+1}走前 {rc}{rd}m: 走破{gs:.1f}s / CR({rv}){cr_val:.1f}s "
+                    f"差{diff_cr:+.2f}s → {pts_cr:.1f}×{w_cr:.2f} = {pts_cr*w_cr:.2f}点{dist_note}"
+                )
+                evaluated_cr += 1
+            if evaluated_cr == 0:
+                lines.append("  （対象走なし：同距離±200m・同トラックの走破タイムが取得できません）")
+
         # ─── 連続大敗ペナルティ（最詳細） ────────────────────────────────────────
         clp = result.get('consecutive_loss_penalty', 0)
         lines.append(f"\n▼ 連続大敗ペナルティ: {clp:.1f}点")
