@@ -14,7 +14,7 @@
 主な変更点 (v6→v7):
 - BeautifulSoup → Scrapling の Adaptor に完全移行
   - css() / find_by_text() / attrib でパースを簡潔化
-  - soup.find("table", class_="...") → page.css_first("table.クラス名")
+  - soup.find("table", class_="...") → page.css("table.クラス名").first
   - link.get("href") → link.attrib.get("href")
 - v6の全機能（キャッシュ、脚質分析、ペース予測、スコア計算）を完全継承
 
@@ -301,15 +301,15 @@ class NetkeibaRaceScraper:
     def _get_race_info(self, page) -> Tuple[str, int, str, str]:
         """レース名・距離・馬場・コース種別を取得（Scraplingセレクタ版）"""
         # レース名
-        race_name_elem = page.css_first('.RaceName')
+        race_name_elem = page.css('.RaceName').first
         if race_name_elem:
             race_name = re.sub(r"出馬表.*", "", race_name_elem.text).strip()
         else:
-            h1 = page.css_first('h1')
+            h1 = page.css('h1').first
             race_name = re.sub(r"出馬表.*", "", h1.text).strip() if h1 else "レース"
 
         # 距離・コース種別・馬場
-        race_data_elem = page.css_first('.RaceData01')
+        race_data_elem = page.css('.RaceData01').first
         race_distance = 1600
         track_type = "不明"
         baba = "良"
@@ -353,14 +353,15 @@ class NetkeibaRaceScraper:
 
         # 出馬表テーブルを取得（複数パターンでフォールバック）
         table = (
-            page.css_first('table.Shutuba_Table') or
-            page.css_first('table[class*="shutuba" i]') or
-            page.css_first('table.RaceList')
+            page.css('table.Shutuba_Table').first or
+            page.css('table[class*="Shutuba"]').first or
+            page.css('table.RaceList').first
         )
         if not table:
             # 「馬名」を含む任意のテーブルにフォールバック
             for t in page.css('table'):
-                if t.css_first('th') and ('馬名' in t.html_content or 'horse' in t.html_content.lower()):
+                content = str(t.html_content)
+                if t.css('th') and ('馬名' in content or 'horse' in content.lower()):
                     table = t
                     break
 
@@ -399,7 +400,7 @@ class NetkeibaRaceScraper:
 
         # 馬名・horse_id: /horse/NNNN... のリンク
         for col in cols:
-            horse_link = col.css_first('a[href*="/horse/"]')
+            horse_link = col.css('a[href*="/horse/"]').first
             if horse_link and not info["馬名"]:
                 info["馬名"] = horse_link.text.strip()
                 match = re.search(r"/horse/(\d{10,})", horse_link.attrib.get('href', ''))
@@ -408,7 +409,7 @@ class NetkeibaRaceScraper:
 
         # 騎手: /jockey/ のリンク
         for col in cols:
-            jockey_link = col.css_first('a[href*="/jockey/"]')
+            jockey_link = col.css('a[href*="/jockey/"]').first
             if jockey_link and not info["騎手"]:
                 info["騎手"] = jockey_link.text.strip()
 
@@ -477,7 +478,7 @@ class NetkeibaRaceScraper:
             return []
 
         # 戦績テーブル
-        table = page.css_first('table.db_h_race_results')
+        table = page.css('table.db_h_race_results').first
         if not table:
             return []
 
@@ -538,7 +539,7 @@ class NetkeibaRaceScraper:
 
                 # ── レース名・race_id ──────────────────────────────────────────
                 race_cell = cols[idx_race]
-                race_link = race_cell.css_first('a')
+                race_link = race_cell.css('a').first
                 race_name_hist = race_link.text.strip() if race_link else race_cell.text.strip()
                 race_id = ""
                 if race_link:
@@ -692,19 +693,23 @@ class NetkeibaRaceScraper:
         lap_times: List[float] = []
 
         # 方法1: "ラップ"テキストを含む要素を探す
-        for elem in page.find_by_text('ラップ', case_sensitive=False):
-            raw = elem.text.strip()
-            times = re.findall(r'\d+\.\d+', raw)
-            if times:
-                lap_times = [float(t) for t in times]
-                break
-            # 次の兄弟要素も確認
-            sib = elem.next
-            if sib:
-                times = re.findall(r'\d+\.\d+', sib.text.strip() if hasattr(sib, 'text') else '')
+        # first_match=False で全マッチを Selectors として返す（イテレーション可能）
+        lap_elems = page.find_by_text('ラップ', first_match=False, partial=True)
+        if lap_elems:
+            # Selectors はリストなので for で回せる
+            for elem in (lap_elems if hasattr(lap_elems, '__iter__') else [lap_elems]):
+                raw = elem.text.strip()
+                times = re.findall(r'\d+\.\d+', raw)
                 if times:
                     lap_times = [float(t) for t in times]
                     break
+                # 次の兄弟要素も確認（.next は Selector の属性として存在）
+                sib = elem.next
+                if sib and hasattr(sib, 'text'):
+                    times = re.findall(r'\d+\.\d+', sib.text.strip())
+                    if times:
+                        lap_times = [float(t) for t in times]
+                        break
 
         if lap_times:
             return lap_times
@@ -746,7 +751,7 @@ class NetkeibaRaceScraper:
         lap_times = self._extract_lap_times(page)
 
         # 馬場状態
-        race_data = page.css_first('.RaceData01')
+        race_data = page.css('.RaceData01').first
         baba = "良"
         if race_data:
             t = race_data.text
@@ -757,7 +762,7 @@ class NetkeibaRaceScraper:
             elif "重" in t and "稍" not in t:
                 baba = "重"
 
-        table = page.css_first('table.race_table_01')
+        table = page.css('table.race_table_01').first
         if not table:
             return {}
 
