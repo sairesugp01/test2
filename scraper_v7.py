@@ -2,12 +2,16 @@
 競馬予想AI - scraper_v7.py（Scrapling対応版）
 最終更新: 2026年2月24日
 
+セット構成（同じディレクトリに配置）:
+  scraper_v7.py         ← このファイル
+  enhanced_scorer_v7.py ← スコア計算エンジン（必須）
+
 主な変更点 (v6→v7):
 - 【最重要】requests + BeautifulSoup → Scrapling の Fetcher に完全移行
   - EUC-JPの自動デコード対応（response.encoding = 'EUC-JP' 不要）
   - Cloudflare等のbot検知を回避（curl_cffiベースのTLS偽装）
   - セレクタAPIが簡潔（css/xpath/find/find_all → Scraplingネイティブ）
-- adaptive=True でセレクタ変更への自動適応（サイト改修への耐性）
+- auto_match=True でセレクタ変更への自動適応（サイト改修への耐性）
 - _get_race_last_3f_stats / _parse_shutuba / _get_horse_history をScraplingに書き換え
 - requests.Sessionを廃止 → Fetcher.get() に統一（セッション管理は内部で自動）
 - v6の全機能（キャッシュ、脚質分析、ペース予測、スコア計算）を完全継承
@@ -15,6 +19,15 @@
 必要ライブラリ:
   pip install scrapling[all]
   scrapling-install  # Playwright等のブラウザドライバ（必要な場合のみ）
+
+Streamlit Cloud へのデプロイ:
+  requirements.txt に以下を追加:
+    scrapling[all]
+  GitHub リポジトリのルートに配置するファイル:
+    scraper_v7.py
+    enhanced_scorer_v7.py
+    requirements.txt
+    （その他のStreamlitアプリファイル）
 """
 
 import time
@@ -40,7 +53,10 @@ try:
     from enhanced_scorer_v7 import RaceScorer
 except ImportError as e:
     logger.error(f"Import error: {e}")
-    raise ImportError("enhanced_scorer_v7.py が必要です")
+    raise ImportError(
+        "enhanced_scorer_v7.py が見つかりません。\n"
+        "scraper_v7.py と同じディレクトリに enhanced_scorer_v7.py を配置してください。"
+    )
 
 
 class NetkeibaRaceScraper:
@@ -1024,4 +1040,4 @@ class NetkeibaRaceScraper:
 
 
 if __name__ == "__main__":
-    print("✅ NetkeibaRaceScraper v7（Scrapling対応版）loaded")
+    print("✅ scraper_v7.py (NetkeibaRaceScraper v7 / Scrapling対応版) loaded")
