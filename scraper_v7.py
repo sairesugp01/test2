@@ -303,19 +303,22 @@ class NetkeibaRaceScraper:
         # レース名
         race_name_elem = page.css('.RaceName').first
         if race_name_elem:
-            race_name = re.sub(r"出馬表.*", "", race_name_elem.text).strip()
+            race_name = re.sub(r"出馬表.*", "", race_name_elem.get_all_text()).strip()
         else:
             h1 = page.css('h1').first
-            race_name = re.sub(r"出馬表.*", "", h1.text).strip() if h1 else "レース"
+            race_name = re.sub(r"出馬表.*", "", h1.get_all_text()).strip() if h1 else "レース"
 
         # 距離・コース種別・馬場
+        # ※ .text は直下テキストノードのみ。span等で分割されている場合は
+        #   get_all_text() で子要素含む全テキストを取得する必要がある
         race_data_elem = page.css('.RaceData01').first
         race_distance = 1600
         track_type = "不明"
         baba = "良"
 
         if race_data_elem:
-            text = race_data_elem.text
+            text = race_data_elem.get_all_text()  # span等の子要素含む全テキスト
+
             dist_match = re.search(r"[芝ダ障](\d+)m", text)
             if dist_match:
                 race_distance = int(dist_match.group(1))
@@ -415,7 +418,7 @@ class NetkeibaRaceScraper:
 
         # 枠・馬番（先頭3列）
         for idx in range(min(3, len(cols))):
-            text = cols[idx].text.strip()
+            text = cols[idx].get_all_text().strip()
             if not info["枠"] and len(text) == 1 and text.isdigit() and 1 <= int(text) <= 8:
                 info["枠"] = text
             elif not info["馬番"] and len(text) <= 2 and text.isdigit() and 1 <= int(text) <= 18:
@@ -423,7 +426,7 @@ class NetkeibaRaceScraper:
 
         # 性齢・斤量
         for col in cols:
-            text = col.text.strip()
+            text = col.get_all_text().strip()
             norm = unicodedata.normalize('NFKC', text).replace(' ', '').replace('\u3000', '')
 
             if not info["性齢"]:
@@ -482,7 +485,8 @@ class NetkeibaRaceScraper:
         if not table:
             return []
 
-        headers = [th.text.strip() for th in table.css('th')]
+        # th は span 内にテキストが入っている場合があるため get_all_text() を使う
+        headers = [th.get_all_text().strip() for th in table.css('th')]
 
         def find_col(keywords):
             for kw in keywords:
@@ -529,12 +533,12 @@ class NetkeibaRaceScraper:
                 continue
             try:
                 # ── 日付 ──────────────────────────────────────────────────────
-                date_raw = cols[idx_date].text.strip()
+                date_raw = cols[idx_date].get_all_text().strip()
                 dm = re.search(r'(\d{4})[年/](\d{1,2})[月/](\d{1,2})', date_raw)
                 date = f"{dm.group(1)}/{int(dm.group(2)):02d}/{int(dm.group(3)):02d}" if dm else date_raw
 
                 # ── コース（競馬場名） ─────────────────────────────────────────
-                course_raw = cols[idx_course].text.strip()
+                course_raw = cols[idx_course].get_all_text().strip()
                 course_name = next((c for c in _known_courses if c in course_raw), course_raw)
 
                 # ── レース名・race_id ──────────────────────────────────────────
@@ -549,7 +553,7 @@ class NetkeibaRaceScraper:
                         race_id = m.group(1)
 
                 # ── 距離・コース種別 ────────────────────────────────────────────
-                dist_text = cols[idx_dist].text.strip()
+                dist_text = cols[idx_dist].get_all_text().strip()
                 track_type_match = re.match(r"^(芝|ダ|ダート|障)", dist_text)
                 if track_type_match:
                     tp = track_type_match.group(1)
@@ -560,14 +564,14 @@ class NetkeibaRaceScraper:
                 distance = int(dist_m.group(1)) if dist_m else 0
 
                 # ── 着順（中止・除外・取消はスキップ） ──────────────────────────
-                chakujun_text = cols[idx_chakujun].text.strip()
+                chakujun_text = cols[idx_chakujun].get_all_text().strip()
                 if any(kw in chakujun_text for kw in ["中止", "除外", "取消", "取り消"]):
                     continue
                 cm = re.search(r"(\d+)", chakujun_text)
                 chakujun = int(cm.group(1)) if cm else 99
 
                 # ── 着差 ──────────────────────────────────────────────────────
-                chakusa_text = cols[idx_chakusa].text.strip() if idx_chakusa < len(cols) else ""
+                chakusa_text = cols[idx_chakusa].get_all_text().strip() if idx_chakusa < len(cols) else ""
                 winner_margin = 0.0
                 if chakujun == 1:
                     goal_time_diff = 0.0
@@ -583,20 +587,20 @@ class NetkeibaRaceScraper:
 
                 # ── 斤量 ──────────────────────────────────────────────────────
                 try:
-                    weight = float(cols[idx_weight].text.strip())
+                    weight = float(cols[idx_weight].get_all_text().strip())
                 except Exception:
                     weight = current_weight
 
                 # ── 上がり3F ──────────────────────────────────────────────────
                 try:
-                    last_3f = float(cols[idx_3f].text.strip()) if idx_3f < len(cols) else 0.0
+                    last_3f = float(cols[idx_3f].get_all_text().strip()) if idx_3f < len(cols) else 0.0
                 except Exception:
                     last_3f = 0.0
 
                 # ── 走破タイム ─────────────────────────────────────────────────
                 goal_sec = 0.0
                 if idx_time != -1 and idx_time < len(cols):
-                    time_raw = cols[idx_time].text.strip()
+                    time_raw = cols[idx_time].get_all_text().strip()
                     try:
                         if ':' in time_raw:
                             parts = time_raw.split(':')
@@ -609,14 +613,14 @@ class NetkeibaRaceScraper:
                 # ── 通過順位（4角） ────────────────────────────────────────────
                 corner_pos = 0
                 if idx_corner != -1 and idx_corner < len(cols):
-                    positions = re.findall(r'\d+', cols[idx_corner].text.strip())
+                    positions = re.findall(r'\d+', cols[idx_corner].get_all_text().strip())
                     if positions:
                         corner_pos = int(positions[-1])
 
                 # ── 出走頭数 ──────────────────────────────────────────────────
                 field_size = 16
                 if idx_tosu != -1 and idx_tosu < len(cols):
-                    tm = re.search(r'(\d+)', cols[idx_tosu].text.strip())
+                    tm = re.search(r'(\d+)', cols[idx_tosu].get_all_text().strip())
                     if tm:
                         field_size = int(tm.group(1))
 
@@ -754,7 +758,7 @@ class NetkeibaRaceScraper:
         race_data = page.css('.RaceData01').first
         baba = "良"
         if race_data:
-            t = race_data.text
+            t = race_data.get_all_text()  # span等の子要素含む全テキスト
             if "不良" in t:
                 baba = "不良"
             elif "稍重" in t or "稍" in t:
@@ -766,7 +770,7 @@ class NetkeibaRaceScraper:
         if not table:
             return {}
 
-        headers = [th.text.strip() for th in table.css('th')]
+        headers = [th.get_all_text().strip() for th in table.css('th')]
 
         def find_col_idx(keywords):
             for kw in keywords:
@@ -805,14 +809,14 @@ class NetkeibaRaceScraper:
             if len(tds) <= max(last_3f_idx, chakujun_idx, time_idx):
                 continue
             try:
-                cm = re.search(r'(\d+)', tds[chakujun_idx].text.strip())
+                cm = re.search(r'(\d+)', tds[chakujun_idx].get_all_text().strip())
                 if not cm:
                     continue
                 chakujun = int(cm.group(1))
 
-                goal_sec = parse_time_to_sec(tds[time_idx].text.strip())
+                goal_sec = parse_time_to_sec(tds[time_idx].get_all_text().strip())
 
-                last_3f_raw = re.sub(r"[()（）]", "", tds[last_3f_idx].text.strip())
+                last_3f_raw = re.sub(r"[()（）]", "", tds[last_3f_idx].get_all_text().strip())
                 try:
                     last_3f = float(last_3f_raw)
                 except Exception:
