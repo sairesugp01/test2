@@ -6,23 +6,25 @@
   scraper_v7.py         ← このファイル
   enhanced_scorer_v7.py ← スコア計算エンジン（必須）
 
+アーキテクチャ:
+  HTTP通信 : requests.Session（Streamlit Cloud互換。curl_cffiはCONNECT tunnelがブロックされる）
+  パース   : Scrapling の Adaptor（css / find_by_text / attrib 等の高機能APIを利用）
+  EUC-JP  : response.content.decode('EUC-JP') で明示デコードしてから Adaptor に渡す
+
 主な変更点 (v6→v7):
-- 【最重要】requests + BeautifulSoup → Scrapling の Fetcher に完全移行
-  - EUC-JPの自動デコード対応（response.encoding = 'EUC-JP' 不要）
-  - Cloudflare等のbot検知を回避（curl_cffiベースのTLS偽装）
-  - セレクタAPIが簡潔（css/xpath/find/find_all → Scraplingネイティブ）
-- auto_match=True でセレクタ変更への自動適応（サイト改修への耐性）
-- _get_race_last_3f_stats / _parse_shutuba / _get_horse_history をScraplingに書き換え
-- requests.Sessionを廃止 → Fetcher.get() に統一（セッション管理は内部で自動）
+- BeautifulSoup → Scrapling の Adaptor に完全移行
+  - css() / find_by_text() / attrib でパースを簡潔化
+  - soup.find("table", class_="...") → page.css_first("table.クラス名")
+  - link.get("href") → link.attrib.get("href")
 - v6の全機能（キャッシュ、脚質分析、ペース予測、スコア計算）を完全継承
 
 必要ライブラリ:
-  pip install scrapling[all]
-  scrapling-install  # Playwright等のブラウザドライバ（必要な場合のみ）
+  pip install scrapling requests pandas
 
 Streamlit Cloud へのデプロイ:
   requirements.txt に以下を追加:
-    scrapling[all]
+    scrapling
+    requests
   GitHub リポジトリのルートに配置するファイル:
     scraper_v7.py
     enhanced_scorer_v7.py
@@ -38,12 +40,15 @@ from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 from collections import Counter
 
+import requests
 import pandas as pd
 
-# ── Scrapling ─────────────────────────────────────────────────────────────────
-from scrapling import Fetcher          # 静的ページ用（curl_cffi / TLS偽装）
-# from scrapling import StealthyFetcher  # より強力なbot回避が必要な場合
-# from scrapling import PlayWrightFetcher  # JS描画が必要な場合
+# ── Scrapling（パーサーのみ使用） ──────────────────────────────────────────────
+# Streamlit Cloud では curl_cffi の CONNECT tunnel がブロックされるため、
+# HTTP通信は requests.Session で行い、レスポンスの bytes を Scrapling の Adaptor に
+# 渡すことで css()/find_by_text() 等の高機能パースAPIだけを利用する。
+# EUC-JP デコードも requests 側で行い、Adaptor には str を渡す。
+from scrapling.parser import Adaptor
 # ──────────────────────────────────────────────────────────────────────────────
 
 logging.basicConfig(level=logging.INFO)
@@ -63,11 +68,14 @@ class NetkeibaRaceScraper:
     """netkeibaスクレイパー v7（Scrapling対応版）"""
 
     def __init__(self, scraping_delay: float = 1.5, debug_mode: bool = False):
-        # ── Scraplingのフェッチャー ────────────────────────────────────────────
-        # adaptive=True: 過去の成功セレクタを記憶し、サイト改修後も自動適応
-        # stealthy=False → Fetcher で十分。bot検知が厳しい場合は StealthyFetcher へ
-        self.fetcher = Fetcher(auto_match=True)
-        # ──────────────────────────────────────────────────────────────────────
+        # ── HTTP通信：requests.Session（Streamlit Cloud互換） ─────────────────
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                          'AppleWebKit/537.36 (KHTML, like Gecko) '
+                          'Chrome/120.0.0.0 Safari/537.36'
+        })
+        # ── パース：Scrapling の Adaptor（css/find_by_text 等を利用） ─────────
 
         self.scorer = RaceScorer(debug_mode=debug_mode)
         self.scraping_delay = scraping_delay
@@ -266,14 +274,29 @@ class NetkeibaRaceScraper:
     # ▼▼▼ Scrapling書き換え：レースページ（出馬表）取得 ▼▼▼
     # ═══════════════════════════════════════════════════════════════════════════
 
-    def _fetch_page(self, url: str, encoding: str = 'EUC-JP'):
+    def _fetch_page(self, url: str, encoding: str = 'EUC-JP') -> Adaptor:
         """
-        Scraplingでページを取得して Adaptor を返す。
-        - curl_cffiベースのTLS偽装でbot検知を回避
-        - encoding を明示指定（netkeiba は EUC-JP）
+        requests.Session でページを取得し、Scrapling の Adaptor に変換して返す。
+
+        【設計理由】
+        Scrapling の Fetcher（curl_cffi ベース）は Streamlit Cloud の
+        ネットワーク環境（CONNECT tunnel 制限）でエラーになる。
+        そのため HTTP 通信は従来通り requests.Session を使用し、
+        レスポンス bytes を Adaptor に渡すことで Scrapling のパース API
+        （css / find_by_text / attrib 等）だけを利用する。
+
+        Args:
+            url:      取得するURL
+            encoding: レスポンスのエンコーディング（netkeibaはEUC-JP）
+
+        Returns:
+            Scrapling の Adaptor オブジェクト（css/find_by_text等が使える）
         """
-        response = self.fetcher.get(url, timeout=15, encoding=encoding)
-        return response  # Scrapling の Response/Adaptor オブジェクト
+        response = self.session.get(url, timeout=15)
+        response.raise_for_status()
+        # EUC-JP など明示的に指定して bytes → str デコード
+        html_str = response.content.decode(encoding, errors='replace')
+        return Adaptor(html_str, url=url)
 
     def _get_race_info(self, page) -> Tuple[str, int, str, str]:
         """レース名・距離・馬場・コース種別を取得（Scraplingセレクタ版）"""
