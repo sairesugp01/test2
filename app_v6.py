@@ -36,7 +36,7 @@ st.set_page_config(page_title="競馬予想AI v9.0 (Scorer v7)", page_icon="🏇
 # scraperのインポート
 _import_error = None
 try:
-    from scraper_v5 import NetkeibaRaceScraper
+    from scraper_v7 import NetkeibaRaceScraper
 except ImportError as e:
     _import_error = str(e)
 
@@ -44,7 +44,7 @@ if _import_error:
     st.error(f"❌ **Import Error**: {_import_error}")
     st.error("""
     **解決方法**:
-    1. `scraper_v5.py` と `enhanced_scorer_v7.py` が同じディレクトリにあることを確認
+    1. `scraper_v7.py` と `enhanced_scorer_v7.py` が同じディレクトリにあることを確認
     2. Streamlit Cloudの場合、GitHubリポジトリのルートに全ファイルを配置
     3. ファイル名が正確に一致しているか確認(大文字小文字も含む)
     """)
