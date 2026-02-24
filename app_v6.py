@@ -685,7 +685,8 @@ if mode == "個別レース":
             )
             
             report_type = "予想レポート" if st.session_state['current_mode'] == 'analysis' else "結果照合レポート"
-            filename = f"{venue_sel}_{race_no}R_{report_type}_{datetime.now().strftime('%Y%m%d')}.pdf"
+            race_date_str = f"{date_sel[4:6]}月{date_sel[6:8]}日"
+            filename = f"{race_date_str}_{venue_sel}_{race_no}R_{report_type}.pdf"
             
             st.download_button(
                 label=f"📥 {report_type}をダウンロード (PDF)",
@@ -782,7 +783,8 @@ elif mode == "一括レース":
         )
         
         report_type = "全レース予想" if st.session_state['current_mode'] == 'analysis' else "全レース結果照合"
-        filename = f"{venue_sel}_{report_type}_{datetime.now().strftime('%Y%m%d')}.pdf"
+        race_date_str = f"{date_sel[4:6]}月{date_sel[6:8]}日"
+        filename = f"{race_date_str}_{venue_sel}_{report_type}.pdf"
         
         st.download_button(
             label=f"📥 {report_type}レポートをダウンロード (PDF)",
